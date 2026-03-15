@@ -1,0 +1,13 @@
+dependencies:
+  - name: babylon.js
+    version: 5.0.0
+    src: "htmlwidgets/lib"
+    script: "babylon.js"
+  - name: pep.js
+    version: 0.4.3
+    src: "htmlwidgets/lib"
+    script: "pep.js"
+  - name: babylonjs-loaders
+    version: 5.0.0
+    src: "htmlwidgets/lib"
+    script: "babylonjs.loaders.min.js"
