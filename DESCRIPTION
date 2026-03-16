@@ -8,9 +8,13 @@ Maintainer: Gemini <gemini@google.com>
 Description: Provides an R interface to the BabylonJS 3D visualization library.
 License: Apache-2.0
 Imports:
-    htmlwidgets
+    htmltools,
+    htmlwidgets,
+    jsonlite
 Suggests:
     knitr,
-    rmarkdown
+    miniUI,
+    rmarkdown,
+    shiny
 VignetteBuilder: knitr
 RoxygenNote: 7.3.3

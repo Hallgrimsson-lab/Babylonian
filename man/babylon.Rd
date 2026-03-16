@@ -6,13 +6,19 @@
 \usage{
 babylon(
   data = list(list(type = "sphere", diameter = 2)),
+  interaction = NULL,
   width = NULL,
   height = NULL,
   elementId = NULL
 )
 }
 \arguments{
-\item{data}{A list of data to be passed to the widget.}
+\item{data}{A list of scene objects to be passed to the widget. Entries can
+be Babylonian primitive specifications, file-backed meshes created with
+[import_mesh()], or `mesh3d` objects such as those returned by Morpho.}
+
+\item{interaction}{Optional interaction settings used by bespoke tools such
+as landmark digitizing.}
 
 \item{width}{The width of the widget.}
 
