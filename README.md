@@ -55,20 +55,30 @@ convert it automatically.
 
 ## RGL-style workflow
 
-`Babylonian` now includes a `babylon_mesh` class so mesh plotting can start to
+`Babylonian` now includes a `plot3d()` generic so mesh plotting can start to
 look like `rgl` code:
 
 ```r
 library(Babylonian)
 
-mesh <- as_babylon_mesh(your_morpho_mesh, color = "#d97706")
-plot(mesh)
+plot3d(your_morpho_mesh, color = "#d97706")
 ```
 
-You can also override basic graphical settings at plot time:
+That works directly for `mesh3d` objects imported through Morpho, and you can
+still explicitly convert first if you want a reusable Babylonian mesh object:
 
 ```r
-plot(mesh, color = "#2563eb", alpha = 0.95)
+mesh <- as_babylon_mesh(your_morpho_mesh, color = "#d97706")
+plot3d(mesh, color = "#2563eb", alpha = 0.95)
+```
+
+By default, `plot3d()` now adds lightweight axis lines, tick marks, numeric
+labels, and a bounding box around the plotted object. You can tune or disable
+that with:
+
+```r
+plot3d(your_morpho_mesh, axes = TRUE, nticks = 4)
+plot3d(your_morpho_mesh, axes = FALSE)
 ```
 
 ## Surface landmark digitizing

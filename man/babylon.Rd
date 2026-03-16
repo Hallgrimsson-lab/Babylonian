@@ -7,6 +7,7 @@
 babylon(
   data = list(list(type = "sphere", diameter = 2)),
   interaction = NULL,
+  scene = NULL,
   width = NULL,
   height = NULL,
   elementId = NULL
@@ -19,6 +20,8 @@ be Babylonian primitive specifications, file-backed meshes created with
 
 \item{interaction}{Optional interaction settings used by bespoke tools such
 as landmark digitizing.}
+
+\item{scene}{Optional scene decorations and display settings.}
 
 \item{width}{The width of the widget.}
 

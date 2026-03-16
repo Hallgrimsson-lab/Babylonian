@@ -57,6 +57,56 @@ HTMLWidgets.widget({
     uiLayer.style.lineHeight = "1.4";
     el.style.position = "relative";
     el.appendChild(uiLayer);
+    var labelLayer = document.createElement("div");
+    labelLayer.style.position = "absolute";
+    labelLayer.style.inset = "0";
+    labelLayer.style.pointerEvents = "none";
+    labelLayer.style.zIndex = "5";
+    el.appendChild(labelLayer);
+    var sceneDecorations = [];
+    var axisLabelState = [];
+    var currentSceneOptions = null;
+    var currentSceneBounds = null;
+
+    function clamp01(x) {
+      if (!isFinite(x)) {
+        return 0;
+      }
+      return Math.min(1, Math.max(0, x));
+    }
+
+    function isHexColor(value) {
+      return typeof value === "string" && /^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(value);
+    }
+
+    function coerceColor3(value, fallback) {
+      if (value instanceof BABYLON.Color3) {
+        return value;
+      }
+
+      if (Array.isArray(value) && value.length >= 3) {
+        return new BABYLON.Color3(
+          clamp01(Number(value[0])),
+          clamp01(Number(value[1])),
+          clamp01(Number(value[2]))
+        );
+      }
+
+      if (typeof value === "number") {
+        var scalar = clamp01(value);
+        return new BABYLON.Color3(scalar, scalar, scalar);
+      }
+
+      if (isHexColor(value)) {
+        return BABYLON.Color3.FromHexString(value.slice(0, 7));
+      }
+
+      if (fallback) {
+        return fallback.clone ? fallback.clone() : fallback;
+      }
+
+      return null;
+    }
 
     function applyTransform(mesh, primitive) {
       if (primitive.position) {
@@ -87,7 +137,7 @@ HTMLWidgets.widget({
     }
 
     function applyMaterial(mesh, primitive) {
-      if (!primitive.color && primitive.alpha === undefined) {
+      if (!primitive.color && primitive.alpha === undefined && primitive.specularity === undefined) {
         return;
       }
 
@@ -95,7 +145,14 @@ HTMLWidgets.widget({
       material.backFaceCulling = true;
 
       if (primitive.color) {
-        material.diffuseColor = BABYLON.Color3.FromHexString(primitive.color);
+        material.diffuseColor = coerceColor3(primitive.color, material.diffuseColor);
+      }
+
+      if (primitive.specularity !== undefined) {
+        material.specularColor = coerceColor3(
+          primitive.specularity,
+          new BABYLON.Color3(0, 0, 0)
+        );
       }
 
       if (primitive.alpha !== undefined) {
@@ -115,7 +172,7 @@ HTMLWidgets.widget({
       marker.isPickable = !!isPickable;
 
       var material = new BABYLON.StandardMaterial(name + "-material", scene);
-      material.diffuseColor = BABYLON.Color3.FromHexString(color || "#dc2626");
+      material.diffuseColor = coerceColor3(color, BABYLON.Color3.FromHexString("#dc2626"));
       material.emissiveColor = material.diffuseColor.scale(0.3);
       material.backFaceCulling = true;
       marker.material = material;
@@ -285,16 +342,172 @@ HTMLWidgets.widget({
       camera.upperRadiusLimit = radius * 20;
       camera.minZ = Math.max(radius / 1000, 0.01);
       camera.maxZ = Math.max(radius * 100, 1000);
+      currentSceneBounds = {min: min.clone(), max: max.clone(), center: center.clone(), radius: radius};
+    }
+
+    function clearSceneDecorations() {
+      sceneDecorations.forEach(function(mesh) {
+        if (mesh && mesh.dispose) {
+          mesh.dispose();
+        }
+      });
+      sceneDecorations = [];
+      axisLabelState = [];
+      labelLayer.innerHTML = "";
+    }
+
+    function niceStep(span, ticks) {
+      var rough = span / Math.max(ticks, 1);
+      var exponent = Math.floor(Math.log10(Math.max(rough, 1e-8)));
+      var fraction = rough / Math.pow(10, exponent);
+      var niceFraction = 1;
+
+      if (fraction > 5) {
+        niceFraction = 10;
+      } else if (fraction > 2) {
+        niceFraction = 5;
+      } else if (fraction > 1) {
+        niceFraction = 2;
+      }
+
+      return niceFraction * Math.pow(10, exponent);
+    }
+
+    function makeLine(points, color, name) {
+      var line = BABYLON.MeshBuilder.CreateLines(name, {points: points, updatable: false}, scene);
+      line.color = color;
+      line.isPickable = false;
+      sceneDecorations.push(line);
+      return line;
+    }
+
+    function addAxisLabel(text, point, color) {
+      var label = document.createElement("div");
+      label.textContent = text;
+      label.style.position = "absolute";
+      label.style.fontFamily = "Menlo, Monaco, Consolas, monospace";
+      label.style.fontSize = "11px";
+      label.style.color = color;
+      label.style.whiteSpace = "nowrap";
+      label.style.textShadow = "0 1px 0 rgba(255,255,255,0.8)";
+      labelLayer.appendChild(label);
+      axisLabelState.push({
+        element: label,
+        point: point.clone()
+      });
+    }
+
+    function updateAxisLabels() {
+      axisLabelState.forEach(function(item) {
+        var projected = BABYLON.Vector3.Project(
+          item.point,
+          BABYLON.Matrix.Identity(),
+          scene.getTransformMatrix(),
+          camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight())
+        );
+        item.element.style.left = projected.x + "px";
+        item.element.style.top = projected.y + "px";
+      });
+    }
+
+    function renderAxes(bounds, sceneOptions) {
+      clearSceneDecorations();
+
+      if (!sceneOptions || !sceneOptions.axes || !bounds) {
+        return;
+      }
+
+      var min = bounds.min;
+      var max = bounds.max;
+      var span = max.subtract(min);
+      var tickTarget = Math.max(2, sceneOptions.nticks || 5);
+      var tickLength = bounds.radius * 0.03;
+      var xColor = BABYLON.Color3.FromHexString("#b91c1c");
+      var yColor = BABYLON.Color3.FromHexString("#047857");
+      var zColor = BABYLON.Color3.FromHexString("#1d4ed8");
+      var boxColor = BABYLON.Color3.FromHexString("#94a3b8");
+
+      makeLine([
+        new BABYLON.Vector3(min.x, min.y, min.z),
+        new BABYLON.Vector3(max.x, min.y, min.z)
+      ], xColor, "axis-x");
+      makeLine([
+        new BABYLON.Vector3(min.x, min.y, min.z),
+        new BABYLON.Vector3(min.x, max.y, min.z)
+      ], yColor, "axis-y");
+      makeLine([
+        new BABYLON.Vector3(min.x, min.y, min.z),
+        new BABYLON.Vector3(min.x, min.y, max.z)
+      ], zColor, "axis-z");
+
+      addAxisLabel("x", new BABYLON.Vector3(max.x, min.y, min.z), "#b91c1c");
+      addAxisLabel("y", new BABYLON.Vector3(min.x, max.y, min.z), "#047857");
+      addAxisLabel("z", new BABYLON.Vector3(min.x, min.y, max.z), "#1d4ed8");
+
+      var boxCorners = [
+        new BABYLON.Vector3(min.x, min.y, min.z),
+        new BABYLON.Vector3(max.x, min.y, min.z),
+        new BABYLON.Vector3(max.x, max.y, min.z),
+        new BABYLON.Vector3(min.x, max.y, min.z),
+        new BABYLON.Vector3(min.x, min.y, max.z),
+        new BABYLON.Vector3(max.x, min.y, max.z),
+        new BABYLON.Vector3(max.x, max.y, max.z),
+        new BABYLON.Vector3(min.x, max.y, max.z)
+      ];
+      [
+        [0, 1], [1, 2], [2, 3], [3, 0],
+        [4, 5], [5, 6], [6, 7], [7, 4],
+        [0, 4], [1, 5], [2, 6], [3, 7]
+      ].forEach(function(edge, index) {
+        makeLine([boxCorners[edge[0]], boxCorners[edge[1]]], boxColor, "box-edge-" + index);
+      });
+
+      [
+        {axis: "x", color: xColor, htmlColor: "#b91c1c", fixed: [min.y, min.z], span: span.x, min: min.x},
+        {axis: "y", color: yColor, htmlColor: "#047857", fixed: [min.x, min.z], span: span.y, min: min.y},
+        {axis: "z", color: zColor, htmlColor: "#1d4ed8", fixed: [min.x, min.y], span: span.z, min: min.z}
+      ].forEach(function(axisInfo) {
+        var step = niceStep(axisInfo.span || 1, tickTarget);
+        var start = Math.ceil(axisInfo.min / step) * step;
+        for (var value = start; value <= axisInfo.min + axisInfo.span + step * 0.5; value += step) {
+          var tickStart;
+          var tickEnd;
+          var labelPoint;
+
+          if (axisInfo.axis === "x") {
+            tickStart = new BABYLON.Vector3(value, axisInfo.fixed[0], axisInfo.fixed[1]);
+            tickEnd = new BABYLON.Vector3(value, axisInfo.fixed[0] - tickLength, axisInfo.fixed[1]);
+            labelPoint = new BABYLON.Vector3(value, axisInfo.fixed[0] - tickLength * 1.6, axisInfo.fixed[1]);
+          } else if (axisInfo.axis === "y") {
+            tickStart = new BABYLON.Vector3(axisInfo.fixed[0], value, axisInfo.fixed[1]);
+            tickEnd = new BABYLON.Vector3(axisInfo.fixed[0] - tickLength, value, axisInfo.fixed[1]);
+            labelPoint = new BABYLON.Vector3(axisInfo.fixed[0] - tickLength * 1.8, value, axisInfo.fixed[1]);
+          } else {
+            tickStart = new BABYLON.Vector3(axisInfo.fixed[0], axisInfo.fixed[1], value);
+            tickEnd = new BABYLON.Vector3(axisInfo.fixed[0] - tickLength, axisInfo.fixed[1], value);
+            labelPoint = new BABYLON.Vector3(axisInfo.fixed[0] - tickLength * 1.8, axisInfo.fixed[1], value);
+          }
+
+          makeLine([tickStart, tickEnd], axisInfo.color, "tick-" + axisInfo.axis + "-" + value.toFixed(4));
+          addAxisLabel(Number(value.toPrecision(4)).toString(), labelPoint, axisInfo.htmlColor);
+        }
+      });
+
+      updateAxisLabels();
     }
 
     // Render the scene
     engine.runRenderLoop(function () {
       scene.render();
+      if (axisLabelState.length) {
+        updateAxisLabels();
+      }
     });
 
     // Resize the engine on window resize
     window.addEventListener("resize", function () {
       engine.resize();
+      updateAxisLabels();
     });
 
     return {
@@ -303,6 +516,7 @@ HTMLWidgets.widget({
         var payload = Array.isArray(x) ? {objects: x, interaction: null} : x;
         var objects = payload.objects || [];
         var interaction = payload.interaction || null;
+        currentSceneOptions = payload.scene || null;
 
         var pendingImports = 0;
         var sceneUpdated = false;
@@ -312,6 +526,7 @@ HTMLWidgets.widget({
           sceneUpdated = true;
           if (pendingImports === 0) {
             frameScene();
+            renderAxes(currentSceneBounds, currentSceneOptions);
           }
         }
 
@@ -390,6 +605,7 @@ HTMLWidgets.widget({
 
         if (sceneUpdated && pendingImports === 0) {
           frameScene();
+          renderAxes(currentSceneBounds, currentSceneOptions);
         }
 
       },

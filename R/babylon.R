@@ -7,33 +7,37 @@
 #'   [import_mesh()], or `mesh3d` objects such as those returned by Morpho.
 #' @param interaction Optional interaction settings used by bespoke tools such
 #'   as landmark digitizing.
+#' @param scene Optional scene decorations and display settings.
 #' @param width The width of the widget.
 #' @param height The height of the widget.
 #' @param elementId The ID of the HTML element to contain the widget.
 #'
 #' @export
 babylon <- function(
-  data = list(list(type="sphere", diameter=2)),
+  data = list(list(type = "sphere", diameter = 2)),
   interaction = NULL,
+  scene = NULL,
   width = NULL,
   height = NULL,
   elementId = NULL
 ) {
   data <- lapply(data, normalize_scene_object)
+  interaction <- normalize_interaction(interaction)
+  scene <- normalize_scene(scene)
 
   dependencies <- Filter(Negate(is.null), lapply(data, `[[`, "dep"))
   data <- lapply(data, function(d) { d$dep <- NULL; d })
 
-  # create widget
   htmlwidgets::createWidget(
-    name = 'babylon',
+    name = "babylon",
     x = list(
       objects = data,
-      interaction = interaction
+      interaction = interaction,
+      scene = scene
     ),
     width = width,
     height = height,
-    package = 'Babylonian',
+    package = "Babylonian",
     elementId = elementId,
     dependencies = dependencies
   )
@@ -67,8 +71,12 @@ import_mesh <- function(file) {
 #'
 #' @param x A `mesh3d` object.
 #' @param name Optional mesh name.
-#' @param color Optional mesh color.
+#' @param color Optional mesh color. Supports R color names, hex strings,
+#'   palette indices, and RGB vectors.
 #' @param alpha Optional mesh opacity.
+#' @param specularity Optional Babylon specular intensity. Numeric scalars are
+#'   converted to grayscale specular colors in the 0-1 range; RGB vectors and
+#'   hex strings are also accepted.
 #' @param reverse_winding Whether to reverse triangle winding when converting
 #'   the mesh. Enabled by default to match common `mesh3d` orientation with
 #'   Babylon's default front-face convention.
@@ -80,6 +88,7 @@ as_babylon_mesh <- function(
   name = "mesh",
   color = NULL,
   alpha = NULL,
+  specularity = NULL,
   reverse_winding = TRUE,
   ...
 ) {
@@ -102,14 +111,36 @@ as_babylon_mesh <- function(
   )
 
   if (!is.null(color)) {
-    mesh$color <- color
+    mesh$color <- normalize_babylon_color(color)
   }
 
   if (!is.null(alpha)) {
     mesh$alpha <- alpha
   }
 
+  if (!is.null(specularity)) {
+    mesh$specularity <- normalize_babylon_specularity(specularity)
+  }
+
   structure(mesh, class = c("babylon_mesh", "list"))
+}
+
+#' Plot 3D objects with BabylonJS
+#'
+#' This generic mirrors the feel of `rgl::plot3d()` while dispatching to
+#' Babylonian renderers.
+#'
+#' @param x A supported 3D object.
+#' @param ... Additional arguments passed to methods.
+#'
+#' @export
+plot3d <- function(x, ...) {
+  UseMethod("plot3d")
+}
+
+#' @export
+plot3d.default <- function(x, ...) {
+  stop("No `plot3d()` method is available for objects of class ", paste(class(x), collapse = "/"), ".", call. = FALSE)
 }
 
 #' Plot a Babylon mesh using rgl-like conventions
@@ -117,11 +148,15 @@ as_babylon_mesh <- function(
 #' @param x A `babylon_mesh` object.
 #' @param add Whether to add the mesh to an existing widget specification. If
 #'   `FALSE`, a new widget is returned.
+#' @param axes Whether to draw lightweight scene axes, ticks, labels, and a
+#'   bounding box.
+#' @param nticks Approximate number of tick marks per axis when `axes = TRUE`.
 #' @param ... Additional graphical parameters. Recognized values include
-#'   `color`, `alpha`, `position`, `rotation`, and `scaling`.
+#'   `color`, `alpha`, `specularity`, `position`, `rotation`, `scaling`, and
+#'   `name`.
 #'
 #' @export
-plot.babylon_mesh <- function(x, add = FALSE, ...) {
+plot3d.babylon_mesh <- function(x, add = FALSE, axes = TRUE, nticks = 5, ...) {
   args <- list(...)
   x <- modify_babylon_mesh(x, args)
 
@@ -129,7 +164,35 @@ plot.babylon_mesh <- function(x, add = FALSE, ...) {
     return(x)
   }
 
-  babylon(list(x))
+  babylon(
+    list(x),
+    scene = list(
+      axes = isTRUE(axes),
+      nticks = as.integer(nticks)
+    )
+  )
+}
+
+#' Plot a `mesh3d` object with BabylonJS
+#'
+#' @param x A `mesh3d` object, such as a mesh imported through Morpho.
+#' @param add Whether to add the mesh to an existing widget specification. If
+#'   `FALSE`, a new widget is returned.
+#' @param axes Whether to draw lightweight scene axes, ticks, labels, and a
+#'   bounding box.
+#' @param nticks Approximate number of tick marks per axis when `axes = TRUE`.
+#' @param ... Additional graphical parameters forwarded to
+#'   [as_babylon_mesh()] and the Babylon mesh renderer.
+#'
+#' @export
+plot3d.mesh3d <- function(x, add = FALSE, axes = TRUE, nticks = 5, ...) {
+  mesh <- do.call(as_babylon_mesh, c(list(x = x), list(...)))
+  plot3d.babylon_mesh(mesh, add = add, axes = axes, nticks = nticks)
+}
+
+#' @export
+plot.babylon_mesh <- function(x, add = FALSE, axes = TRUE, nticks = 5, ...) {
+  plot3d.babylon_mesh(x, add = add, axes = axes, nticks = nticks, ...)
 }
 
 #' Start an interactive landmark digitizer on a Babylon mesh
@@ -170,7 +233,7 @@ digitize_landmarks <- function(
     n = if (is.null(n)) NULL else as.integer(n),
     fixed = normalize_landmarks(fixed),
     marker = list(
-      color = marker_color,
+      color = normalize_babylon_color(marker_color),
       scale = marker_scale
     )
   )
@@ -195,17 +258,155 @@ normalize_scene_object <- function(x) {
     return(as_babylon_mesh(x))
   }
 
+  if (is.list(x)) {
+    if (!is.null(x$color)) {
+      x$color <- normalize_babylon_color(x$color)
+    }
+    if (!is.null(x$specularity)) {
+      x$specularity <- normalize_babylon_specularity(x$specularity)
+    }
+  }
+
   x
 }
 
 modify_babylon_mesh <- function(x, args) {
-  allowed <- c("color", "alpha", "position", "rotation", "scaling", "name")
+  allowed <- c("color", "alpha", "specularity", "position", "rotation", "scaling", "name")
 
   for (nm in intersect(names(args), allowed)) {
-    x[[nm]] <- args[[nm]]
+    value <- args[[nm]]
+    if (nm == "color") {
+      value <- normalize_babylon_color(value)
+    } else if (nm == "specularity") {
+      value <- normalize_babylon_specularity(value)
+    }
+    x[[nm]] <- value
   }
 
   x
+}
+
+normalize_interaction <- function(x) {
+  if (is.null(x) || !is.list(x)) {
+    return(x)
+  }
+
+  if (is.list(x$marker) && !is.null(x$marker$color)) {
+    x$marker$color <- normalize_babylon_color(x$marker$color)
+  }
+
+  x
+}
+
+normalize_babylon_color <- function(x) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+
+  if (is.list(x)) {
+    x <- unlist(x, recursive = TRUE, use.names = FALSE)
+  }
+
+  if (!length(x)) {
+    return(NULL)
+  }
+
+  x <- x[!is.na(x)]
+  if (!length(x)) {
+    return(NULL)
+  }
+
+  if (is.numeric(x)) {
+    if (length(x) == 1L) {
+      idx <- as.integer(x[[1]])
+      pal <- grDevices::palette()
+      if (!is.finite(idx) || idx < 1L || idx > length(pal)) {
+        stop("Numeric colors must be valid palette indices.", call. = FALSE)
+      }
+      x <- pal[[idx]]
+    } else if (length(x) >= 3L) {
+      rgb <- as.numeric(x[seq_len(3)])
+      if (all(is.finite(rgb)) && all(rgb >= 0) && all(rgb <= 1)) {
+        return(sprintf("#%02X%02X%02X", round(rgb[1] * 255), round(rgb[2] * 255), round(rgb[3] * 255)))
+      }
+      if (all(is.finite(rgb)) && all(rgb >= 0) && all(rgb <= 255)) {
+        return(sprintf("#%02X%02X%02X", round(rgb[1]), round(rgb[2]), round(rgb[3])))
+      }
+      stop("Numeric RGB colors must be in the 0-1 or 0-255 range.", call. = FALSE)
+    } else {
+      stop("Numeric colors must be a palette index or an RGB vector.", call. = FALSE)
+    }
+  } else {
+    x <- as.character(x[[1]])
+  }
+
+  rgba <- grDevices::col2rgb(x, alpha = TRUE)
+  sprintf("#%02X%02X%02X", rgba[1, 1], rgba[2, 1], rgba[3, 1])
+}
+
+normalize_babylon_specularity <- function(x) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+
+  if (is.list(x)) {
+    x <- unlist(x, recursive = TRUE, use.names = FALSE)
+  }
+
+  if (!length(x)) {
+    return(NULL)
+  }
+
+  x <- x[!is.na(x)]
+  if (!length(x)) {
+    return(NULL)
+  }
+
+  if (is.numeric(x) && length(x) == 1L) {
+    value <- max(0, min(1, as.numeric(x[[1]])))
+    return(unname(rep(value, 3L)))
+  }
+
+  if (is.numeric(x) && length(x) >= 3L) {
+    rgb <- as.numeric(x[seq_len(3)])
+    if (all(is.finite(rgb)) && all(rgb >= 0) && all(rgb <= 255)) {
+      rgb <- rgb / 255
+    }
+    if (!all(is.finite(rgb)) || !all(rgb >= 0) || !all(rgb <= 1)) {
+      stop("Numeric specularity vectors must be in the 0-1 or 0-255 range.", call. = FALSE)
+    }
+    return(unname(rgb))
+  }
+
+  hex <- normalize_babylon_color(x)
+  rgba <- grDevices::col2rgb(hex) / 255
+  unname(as.numeric(rgba[, 1]))
+}
+
+
+babylon_material_compat_helper <- function() {
+  list(
+    red = normalize_babylon_color("red"),
+    palette_2 = normalize_babylon_color(2),
+    rgb_unit = normalize_babylon_color(c(0.1, 0.2, 0.3)),
+    rgb_byte = normalize_babylon_color(c(10, 20, 30)),
+    spec_scalar = normalize_babylon_specularity(0.4),
+    spec_hex = normalize_babylon_specularity("#666666")
+  )
+}
+
+babylon_material_compat_self_test <- function() {
+  helper <- babylon_material_compat_helper()
+
+  stopifnot(identical(helper$red, "#FF0000"))
+  stopifnot(is.character(helper$palette_2), nchar(helper$palette_2) == 7L)
+  stopifnot(identical(helper$rgb_byte, "#0A141E"))
+  stopifnot(is.character(helper$rgb_unit), nchar(helper$rgb_unit) == 7L)
+  stopifnot(is.numeric(helper$spec_scalar), length(helper$spec_scalar) == 3L)
+  stopifnot(all(abs(helper$spec_scalar - c(0.4, 0.4, 0.4)) < 1e-8))
+  stopifnot(is.numeric(helper$spec_hex), length(helper$spec_hex) == 3L)
+
+  invisible(helper)
 }
 
 normalize_landmarks <- function(x) {
@@ -218,6 +419,18 @@ normalize_landmarks <- function(x) {
   }
 
   unname(x)
+}
+
+normalize_scene <- function(x) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+
+  if (!is.null(x$nticks)) {
+    x$nticks <- as.integer(x$nticks)
+  }
+
+  x
 }
 
 run_landmark_gadget <- function(widget, n = NULL) {
