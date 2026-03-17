@@ -105,6 +105,15 @@ For a true spherical scatterplot, use `spheres3d()`:
 spheres3d(pts, radius = 0.02, color = rep(c("steelblue", "goldenrod"), length.out = nrow(pts)))
 ```
 
+
+To save a static screenshot of the current scene, use `snapshot2d()` or `snapshot3d()` (plus
+`rgl`-style aliases `rgl.snapshot()` and `snapshot()` for `snapshot3d()`):
+
+```r
+plot3d(your_morpho_mesh)
+snapshot2d("scene.png")
+```
+
 ## View state
 
 Babylonian also has a lightweight `par3d()`-style view state for repeatable
