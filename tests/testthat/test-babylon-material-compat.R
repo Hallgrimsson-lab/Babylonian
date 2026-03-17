@@ -74,3 +74,17 @@ testthat::test_that("mesh argument mutation applies compatibility layer", {
   testthat::expect_identical(out$color, "#0A141E")
   testthat::expect_equal(out$specularity, c(0.5, 0.5, 0.5))
 })
+
+
+testthat::test_that("snapshot aliases map to snapshot3d", {
+  testthat::expect_identical(snapshot, snapshot3d)
+  testthat::expect_identical(rgl.snapshot, snapshot3d)
+})
+
+testthat::test_that("snapshot3d errors when no scene is available", {
+  clear_scene3d()
+  testthat::expect_error(
+    snapshot3d(tempfile(fileext = ".png")),
+    "No active Babylonian scene available"
+  )
+})
