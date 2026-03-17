@@ -1,3 +1,13 @@
+# Environment used to accumulate the current scene in an rgl-like workflow.
+.babylon_state <- new.env(parent = emptyenv())
+.babylon_state$current_scene <- NULL
+.babylon_state$par3d <- list(
+  zoom = 0.05,
+  userMatrix = diag(4)
+)
+.babylon_state$last_scene_par3d <- .babylon_state$par3d
+.babylon_state$last_live_par3d <- NULL
+
 #' BabylonJS Widget
 #'
 #' This function creates a new BabylonJS scene.
@@ -24,6 +34,9 @@ babylon <- function(
   data <- lapply(data, normalize_scene_object)
   interaction <- normalize_interaction(interaction)
   scene <- normalize_scene(scene)
+  if (!is.null(scene$view)) {
+    .babylon_state$last_scene_par3d <- deserialize_par3d(scene$view)
+  }
 
   dependencies <- Filter(Negate(is.null), lapply(data, `[[`, "dep"))
   data <- lapply(data, function(d) { d$dep <- NULL; d })
@@ -131,16 +144,46 @@ as_babylon_mesh <- function(
 #' Babylonian renderers.
 #'
 #' @param x A supported 3D object.
+#' @param add Whether to add the object to the current Babylonian scene. Use
+#'   `add = FALSE` to start a fresh scene.
 #' @param ... Additional arguments passed to methods.
 #'
 #' @export
-plot3d <- function(x, ...) {
+plot3d <- function(x, add = FALSE, ...) {
   UseMethod("plot3d")
 }
 
 #' @export
-plot3d.default <- function(x, ...) {
+plot3d.default <- function(x, add = FALSE, ...) {
   stop("No `plot3d()` method is available for objects of class ", paste(class(x), collapse = "/"), ".", call. = FALSE)
+}
+
+#' Plot a 3-column matrix as 3D points
+#'
+#' @param x A numeric matrix with three columns.
+#' @param add Whether to add the point cloud to an existing widget
+#'   specification. If `FALSE`, a new widget is returned.
+#' @param axes Whether to draw lightweight scene axes, ticks, labels, and a
+#'   bounding box.
+#' @param nticks Approximate number of tick marks per axis when `axes = TRUE`.
+#' @param color Point color, or a vector of colors with one entry per row.
+#' @param size Billboard point size relative to scene radius.
+#' @param alpha Point opacity.
+#' @param ... Reserved for future `rgl`-style parameters.
+#'
+#' @export
+plot3d.matrix <- function(
+  x,
+  add = FALSE,
+  axes = TRUE,
+  nticks = 5,
+  color = "black",
+  size = 0.02,
+  alpha = 1,
+  ...
+) {
+  points <- as_babylon_points(x, color = color, size = size, alpha = alpha)
+  append_current_scene(points, add = add, axes = axes, nticks = nticks)
 }
 
 #' Plot a Babylon mesh using rgl-like conventions
@@ -159,18 +202,7 @@ plot3d.default <- function(x, ...) {
 plot3d.babylon_mesh <- function(x, add = FALSE, axes = TRUE, nticks = 5, ...) {
   args <- list(...)
   x <- modify_babylon_mesh(x, args)
-
-  if (isTRUE(add)) {
-    return(x)
-  }
-
-  babylon(
-    list(x),
-    scene = list(
-      axes = isTRUE(axes),
-      nticks = as.integer(nticks)
-    )
-  )
+  append_current_scene(x, add = add, axes = axes, nticks = nticks)
 }
 
 #' Plot a `mesh3d` object with BabylonJS
@@ -193,6 +225,99 @@ plot3d.mesh3d <- function(x, add = FALSE, axes = TRUE, nticks = 5, ...) {
 #' @export
 plot.babylon_mesh <- function(x, add = FALSE, axes = TRUE, nticks = 5, ...) {
   plot3d.babylon_mesh(x, add = add, axes = axes, nticks = nticks, ...)
+}
+
+#' Convert a 3-column matrix into a Babylonian point-cloud specification
+#'
+#' @param x A numeric matrix with three columns.
+#' @param color Point color, or a vector of colors with one entry per row.
+#' @param size Billboard point size relative to scene radius.
+#' @param alpha Point opacity.
+#'
+#' @export
+as_babylon_points <- function(x, color = "black", size = 0.02, alpha = 1) {
+  x <- validate_xyz_matrix(x)
+  color <- normalize_point_colors(color, nrow(x))
+
+  structure(
+    list(
+      type = "points3d",
+      points = unname(x),
+      color = color,
+      size = size,
+      alpha = alpha
+    ),
+    class = c("babylon_points", "list")
+  )
+}
+
+#' Render billboarded 3D points
+#'
+#' @param x,y,z Point coordinates.
+#' @param color Point color, or a vector of colors with one entry per point.
+#' @param size Billboard point size relative to scene radius.
+#' @param alpha Point opacity.
+#' @param add Whether to add the object to the current Babylonian scene. Use
+#'   `add = FALSE` to start a fresh scene.
+#' @param axes Whether to draw lightweight scene axes, ticks, labels, and a
+#'   bounding box.
+#' @param nticks Approximate number of tick marks per axis when `axes = TRUE`.
+#'
+#' @export
+points3d <- function(
+  x,
+  y = NULL,
+  z = NULL,
+  color = "black",
+  size = 0.02,
+  alpha = 1,
+  add = TRUE,
+  axes = TRUE,
+  nticks = 5
+) {
+  points <- as_babylon_points(xyz_matrix(x, y, z), color = color, size = size, alpha = alpha)
+  append_current_scene(points, add = add, axes = axes, nticks = nticks)
+}
+
+#' Render a 3D scatterplot with spheres
+#'
+#' @param x,y,z Point coordinates.
+#' @param radius Sphere radius relative to scene radius.
+#' @param color Sphere color, or a vector of colors with one entry per point.
+#' @param alpha Sphere opacity.
+#' @param specularity Optional sphere specularity.
+#' @param add Whether to add the object to the current Babylonian scene. Use
+#'   `add = FALSE` to start a fresh scene.
+#' @param axes Whether to draw lightweight scene axes, ticks, labels, and a
+#'   bounding box.
+#' @param nticks Approximate number of tick marks per axis when `axes = TRUE`.
+#'
+#' @export
+spheres3d <- function(
+  x,
+  y = NULL,
+  z = NULL,
+  radius = 0.03,
+  color = "gray40",
+  alpha = 1,
+  specularity = 0.1,
+  add = TRUE,
+  axes = TRUE,
+  nticks = 5
+) {
+  points <- xyz_matrix(x, y, z)
+  color <- normalize_point_colors(color, nrow(points))
+
+  spheres <- list(
+    type = "spheres3d",
+    points = unname(points),
+    radius = radius,
+    color = color,
+    alpha = alpha,
+    specularity = normalize_babylon_specularity(specularity)
+  )
+
+  append_current_scene(spheres, add = add, axes = axes, nticks = nticks)
 }
 
 #' Start an interactive landmark digitizer on a Babylon mesh
@@ -253,9 +378,55 @@ digitize_landmarks <- function(
   run_landmark_gadget(widget, n = n)
 }
 
+#' Interactively pose a 3D scene and return its view parameters
+#'
+#' This opens a Shiny gadget with a Babylonian scene, lets you rotate and zoom
+#' the object, and returns the resulting `par3d()`-style view settings when you
+#' finish.
+#'
+#' @param x A supported `plot3d()` object.
+#' @param width Widget width.
+#' @param height Widget height.
+#' @param ... Additional arguments passed to [plot3d()] with `add = FALSE`.
+#'
+#' @export
+create_pose_3d <- function(x, width = NULL, height = NULL, ...) {
+  widget <- do.call(
+    plot3d,
+    c(
+      list(x = x, add = FALSE),
+      list(...)
+    )
+  )
+
+  if (!is.null(width)) {
+    widget$width <- width
+  }
+
+  if (!is.null(height)) {
+    widget$height <- height
+  }
+
+  if (!interactive()) {
+    return(widget)
+  }
+
+  run_pose_gadget(widget)
+}
+
 normalize_scene_object <- function(x) {
   if (inherits(x, "mesh3d")) {
     return(as_babylon_mesh(x))
+  }
+
+  if (inherits(x, "babylon_points") || identical(x$type, "spheres3d")) {
+    if (!is.null(x$color) && length(x$color) == 1L) {
+      x$color <- normalize_babylon_color(x$color)
+    }
+    if (!is.null(x$specularity)) {
+      x$specularity <- normalize_babylon_specularity(x$specularity)
+    }
+    return(x)
   }
 
   if (is.list(x)) {
@@ -423,14 +594,239 @@ normalize_landmarks <- function(x) {
 
 normalize_scene <- function(x) {
   if (is.null(x)) {
-    return(NULL)
+    x <- list()
   }
 
   if (!is.null(x$nticks)) {
     x$nticks <- as.integer(x$nticks)
   }
 
+  if (!is.null(x$view)) {
+    x$view <- normalize_view(x$view)
+  }
+
   x
+}
+
+current_scene_spec <- function() {
+  .babylon_state$current_scene
+}
+
+append_current_scene <- function(object, add = TRUE, axes = TRUE, nticks = 5) {
+  scene_spec <- current_scene_spec()
+
+  if (!isTRUE(add) || is.null(scene_spec)) {
+    scene_spec <- list(
+      objects = list(),
+      scene = list(
+        axes = isTRUE(axes),
+        nticks = as.integer(nticks)
+      )
+    )
+  } else {
+    if (!missing(axes)) {
+      scene_spec$scene$axes <- isTRUE(axes)
+    }
+    if (!missing(nticks) && !is.null(nticks)) {
+      scene_spec$scene$nticks <- as.integer(nticks)
+    }
+  }
+
+  scene_spec$objects[[length(scene_spec$objects) + 1L]] <- object
+  .babylon_state$current_scene <- scene_spec
+
+  babylon(scene_spec$objects, scene = scene_spec$scene)
+}
+
+#' Get or set Babylonian view parameters
+#'
+#' This stores lightweight `par3d()`-style view settings that new Babylonian
+#' scenes will use, including `zoom` and `userMatrix`.
+#'
+#' @param zoom Optional zoom multiplier.
+#' @param userMatrix Optional 4 x 4 user matrix used to rotate the scene pose.
+#' @param reset Whether to restore the default view state.
+#'
+#' @export
+par3d <- function(zoom = NULL, userMatrix = NULL, reset = FALSE) {
+  if (isTRUE(reset)) {
+    .babylon_state$par3d <- list(
+      zoom = 0.05,
+      userMatrix = diag(4)
+    )
+  }
+
+  if (!is.null(zoom)) {
+    .babylon_state$par3d$zoom <- as.numeric(zoom[[1]])
+  }
+
+  if (!is.null(userMatrix)) {
+    .babylon_state$par3d$userMatrix <- normalize_user_matrix(userMatrix)
+  }
+
+  .babylon_state$par3d
+}
+
+#' Get the last Babylonian scene view state
+#'
+#' @param live Whether to prefer the last live camera state reported back from a
+#'   Shiny-backed Babylonian widget. If unavailable, the last constructed scene
+#'   view is returned.
+#'
+#' @export
+last_par3d <- function(live = FALSE) {
+  if (isTRUE(live) && !is.null(.babylon_state$last_live_par3d)) {
+    return(.babylon_state$last_live_par3d)
+  }
+
+  .babylon_state$last_scene_par3d
+}
+
+normalize_view <- function(x) {
+  if (is.null(x)) {
+    return(serialize_par3d(.babylon_state$par3d))
+  }
+
+  zoom <- x$zoom
+  if (is.null(zoom)) {
+    zoom <- .babylon_state$par3d$zoom
+  }
+
+  user_matrix <- x$userMatrix
+  if (is.null(user_matrix)) {
+    user_matrix <- .babylon_state$par3d$userMatrix
+  }
+
+  serialize_par3d(list(
+    zoom = zoom,
+    userMatrix = user_matrix
+  ))
+}
+
+serialize_par3d <- function(x) {
+  mat <- normalize_user_matrix(x$userMatrix)
+  list(
+    zoom = as.numeric(x$zoom[[1]]),
+    userMatrix = unname(split(mat, row(mat)))
+  )
+}
+
+deserialize_par3d <- function(x) {
+  if (is.null(x)) {
+    return(.babylon_state$par3d)
+  }
+
+  list(
+    zoom = as.numeric(x$zoom[[1]]),
+    userMatrix = normalize_user_matrix(x$userMatrix)
+  )
+}
+
+set_last_live_par3d <- function(x) {
+  .babylon_state$last_live_par3d <- deserialize_par3d(x)
+  invisible(.babylon_state$last_live_par3d)
+}
+
+current_pose_input <- function(x = NULL, fallback = NULL) {
+  if (!is.null(x) && nzchar(x)) {
+    return(deserialize_par3d(jsonlite::fromJSON(x, simplifyVector = TRUE)))
+  }
+
+  if (!is.null(fallback)) {
+    return(fallback)
+  }
+
+  live <- last_par3d(live = TRUE)
+  if (!is.null(live)) {
+    return(live)
+  }
+
+  last_par3d()
+}
+
+normalize_user_matrix <- function(x) {
+  if (is.list(x) && length(x) == 4L) {
+    x <- do.call(rbind, lapply(x, unlist, use.names = FALSE))
+  }
+
+  x <- as.matrix(x)
+
+  if (!identical(dim(x), c(4L, 4L))) {
+    stop("`userMatrix` must be a 4 x 4 matrix.", call. = FALSE)
+  }
+
+  storage.mode(x) <- "numeric"
+  x
+}
+
+#' Clear the current Babylonian scene accumulator
+#'
+#' This clears the in-memory scene state used by `plot3d(..., add = TRUE)` and
+#' helper wrappers such as [points3d()] and [spheres3d()].
+#'
+#' @export
+clear_scene3d <- function() {
+  .babylon_state$current_scene <- NULL
+  invisible(NULL)
+}
+
+#' Register knitr hooks for inline Babylonian notebook output
+#'
+#' This registers a `babylon` chunk hook for knitr-based documents such as R
+#' Markdown and Quarto notebooks. When a chunk uses `babylon = TRUE`, the
+#' Babylonian scene accumulator is cleared before the chunk runs so inline
+#' widget output starts from a fresh scene.
+#'
+#' @export
+use_babylon_knitr <- function() {
+  if (!requireNamespace("knitr", quietly = TRUE)) {
+    stop("Package 'knitr' is required to register Babylonian notebook hooks.", call. = FALSE)
+  }
+
+  knitr::knit_hooks$set(
+    babylon = function(before, options, envir) {
+      if (isTRUE(before)) {
+        clear_scene3d()
+      }
+      NULL
+    }
+  )
+
+  invisible(TRUE)
+}
+
+xyz_matrix <- function(x, y = NULL, z = NULL) {
+  if (is.matrix(x)) {
+    return(validate_xyz_matrix(x))
+  }
+
+  if (is.null(y) || is.null(z)) {
+    stop("Provide either an n x 3 matrix or matching `x`, `y`, and `z` vectors.", call. = FALSE)
+  }
+
+  coords <- cbind(x, y, z)
+  validate_xyz_matrix(coords)
+}
+
+validate_xyz_matrix <- function(x) {
+  if (!is.matrix(x) || ncol(x) != 3) {
+    stop("Expected a numeric matrix with exactly three columns.", call. = FALSE)
+  }
+
+  storage.mode(x) <- "numeric"
+  x
+}
+
+normalize_point_colors <- function(color, n) {
+  if (length(color) == 1L) {
+    return(normalize_babylon_color(color))
+  }
+
+  if (length(color) != n) {
+    stop("`color` must have length 1 or match the number of rows in the coordinate matrix.", call. = FALSE)
+  }
+
+  unname(vapply(color, normalize_babylon_color, character(1)))
 }
 
 run_landmark_gadget <- function(widget, n = NULL) {
@@ -461,6 +857,7 @@ run_landmark_gadget <- function(widget, n = NULL) {
 
   server <- function(input, output, session) {
     landmark_input <- paste0(widget$elementId, "_landmarks")
+    par3d_input <- paste0(widget$elementId, "_par3d")
 
     output$landmark_status <- shiny::renderText({
       pts <- input[[landmark_input]]
@@ -471,6 +868,13 @@ run_landmark_gadget <- function(widget, n = NULL) {
         paste("Collected", count, "of", n, "landmarks")
       }
     })
+
+    shiny::observeEvent(input[[par3d_input]], {
+      value <- input[[par3d_input]]
+      if (!is.null(value) && nzchar(value)) {
+        set_last_live_par3d(jsonlite::fromJSON(value, simplifyVector = TRUE))
+      }
+    }, ignoreNULL = TRUE)
 
     shiny::observeEvent(input[[landmark_input]], {
       pts <- input[[landmark_input]]
@@ -506,6 +910,80 @@ run_landmark_gadget <- function(widget, n = NULL) {
   }
 
   result
+}
+
+run_pose_gadget <- function(widget) {
+  if (!requireNamespace("shiny", quietly = TRUE)) {
+    warning("Package 'shiny' is required for interactive pose capture; returning the widget instead.")
+    return(widget)
+  }
+
+  if (!requireNamespace("miniUI", quietly = TRUE)) {
+    warning("Package 'miniUI' is required for interactive pose capture; returning the widget instead.")
+    return(widget)
+  }
+
+  if (is.null(widget$elementId) || identical(widget$elementId, "")) {
+    widget$elementId <- paste0("babylon_pose_", as.integer(stats::runif(1, 1, 1e9)))
+  }
+
+  .babylon_state$last_live_par3d <- NULL
+
+  ui <- miniUI::miniPage(
+    miniUI::gadgetTitleBar("Pose 3D Scene"),
+    miniUI::miniContentPanel(
+      widget,
+      shiny::div(
+        style = "padding-top: 10px; font-family: monospace;",
+        shiny::textOutput("pose_status")
+      )
+    )
+  )
+
+  server <- function(input, output, session) {
+    par3d_input <- paste0(widget$elementId, "_par3d")
+    initial_pose <- list(
+      zoom = 0.05,
+      userMatrix = diag(4)
+    )
+
+    output$pose_status <- shiny::renderText({
+      state <- current_pose_input(input[[par3d_input]], fallback = initial_pose)
+      paste0(
+        "zoom: ", format(round(state$zoom, 4), trim = TRUE),
+        " | userMatrix[1, ]: ",
+        paste(format(round(state$userMatrix[1, ], 4), trim = TRUE), collapse = " ")
+      )
+    })
+
+    shiny::observeEvent(input[[par3d_input]], {
+      value <- input[[par3d_input]]
+      if (!is.null(value) && nzchar(value)) {
+        set_last_live_par3d(jsonlite::fromJSON(value, simplifyVector = TRUE))
+      }
+    }, ignoreNULL = TRUE)
+
+    shiny::observeEvent(input$done, {
+      shiny::stopApp(current_pose_input(input[[par3d_input]], fallback = initial_pose))
+    })
+
+    shiny::observeEvent(input$cancel, {
+      shiny::stopApp(NULL)
+    })
+  }
+
+  viewer <- shiny::dialogViewer(
+    "Pose 3D Scene",
+    width = normalize_viewer_dimension(widget$width, default = 900),
+    height = normalize_viewer_dimension(widget$height, default = 700)
+  )
+  result <- shiny::runGadget(ui, server, viewer = viewer)
+
+  if (is.null(result)) {
+    return(invisible(NULL))
+  }
+
+  par3d(zoom = result$zoom, userMatrix = result$userMatrix)
 }
 
 normalize_viewer_dimension <- function(x, default) {

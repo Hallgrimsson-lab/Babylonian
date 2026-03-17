@@ -22,6 +22,5 @@ bounding box.}
 `name`.}
 }
 \description{
-Plots Babylonian mesh objects using a `plot3d()` interface modeled after
-`rgl`.
+Plot a Babylon mesh using rgl-like conventions
 }

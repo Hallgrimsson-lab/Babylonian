@@ -4,10 +4,13 @@
 \alias{plot3d}
 \title{Plot 3D objects with BabylonJS}
 \usage{
-plot3d(x, ...)
+plot3d(x, add = FALSE, ...)
 }
 \arguments{
 \item{x}{A supported 3D object.}
+
+\item{add}{Whether to add the object to the current Babylonian scene. Use
+`add = FALSE` to start a fresh scene.}
 
 \item{...}{Additional arguments passed to methods.}
 }

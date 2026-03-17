@@ -81,6 +81,64 @@ plot3d(your_morpho_mesh, axes = TRUE, nticks = 4)
 plot3d(your_morpho_mesh, axes = FALSE)
 ```
 
+`plot3d()` starts a fresh scene by default. Wrapper helpers like `points3d()`
+and `spheres3d()` add to the current scene by default, so a typical layered
+workflow looks like this:
+
+```r
+plot3d(your_morpho_mesh, add = FALSE, color = "gray70")
+points3d(matrix(rnorm(60), ncol = 3), color = "tomato")
+```
+
+Any `n x 3` matrix can also be plotted directly as 3D points:
+
+```r
+pts <- matrix(rnorm(300), ncol = 3)
+plot3d(pts, color = "tomato")
+
+plot3d(pts, color = rep(c("tomato", "steelblue"), length.out = nrow(pts)))
+```
+
+For a true spherical scatterplot, use `spheres3d()`:
+
+```r
+spheres3d(pts, radius = 0.02, color = rep(c("steelblue", "goldenrod"), length.out = nrow(pts)))
+```
+
+## View state
+
+Babylonian also has a lightweight `par3d()`-style view state for repeatable
+poses:
+
+```r
+pose <- par3d()
+pose$userMatrix
+pose$zoom
+
+par3d(
+  zoom = 1.4,
+  userMatrix = diag(4)
+)
+
+plot3d(your_morpho_mesh)
+```
+
+That view state is applied to new scenes, so you can reuse the same
+`userMatrix` and `zoom` across multiple plots.
+
+You can also ask for the last Babylonian view state known to R:
+
+```r
+last_par3d()
+```
+
+To interactively create a reusable pose, open a dedicated pose gadget:
+
+```r
+pose <- create_pose_3d(your_morpho_mesh)
+par3d(zoom = pose$zoom, userMatrix = pose$userMatrix)
+```
+
 ## Surface landmark digitizing
 
 For interactive landmark collection on a mesh surface, use BabylonJS ray
@@ -96,3 +154,21 @@ digitize_landmarks(
 The picked landmarks render as tiny spheres relative to the mesh size, and in
 an interactive R session the function returns a 3-column coordinate matrix when
 you finish landmarking.
+
+## R Markdown and Quarto
+
+For inline widget output in knitr-based documents, register the Babylonian
+chunk hook in a setup chunk:
+
+```r
+Babylonian::use_babylon_knitr()
+```
+
+Then mark rendering chunks with `babylon = TRUE` so each chunk starts from a
+fresh Babylonian scene accumulator:
+
+```r
+#| babylon: true
+plot3d(your_morpho_mesh)
+points3d(matrix(rnorm(60), ncol = 3), color = "tomato")
+```

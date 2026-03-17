@@ -11,6 +11,7 @@ HTMLWidgets.widget({
     canvas.width = width;
     canvas.height = height;
     el.appendChild(canvas);
+    el.style.position = "relative";
 
     // Create a Babylon.js engine
     var engine = new BABYLON.Engine(canvas, true);
@@ -30,7 +31,8 @@ HTMLWidgets.widget({
     );
     camera.fov = 0.6;
     camera.minZ = 0.01;
-    camera.wheelPrecision = 40;
+    camera.wheelPrecision = 12;
+    camera.wheelDeltaPercentage = 0.08;
     camera.attachControl(canvas, true);
 
     // Create a light
@@ -55,7 +57,6 @@ HTMLWidgets.widget({
     uiLayer.style.fontFamily = "Menlo, Monaco, Consolas, monospace";
     uiLayer.style.fontSize = "12px";
     uiLayer.style.lineHeight = "1.4";
-    el.style.position = "relative";
     el.appendChild(uiLayer);
     var labelLayer = document.createElement("div");
     labelLayer.style.position = "absolute";
@@ -180,6 +181,42 @@ HTMLWidgets.widget({
       return marker;
     }
 
+    function createPointBillboard(position, color, alpha, size, name) {
+      var plane = BABYLON.MeshBuilder.CreatePlane(name, {size: size}, scene);
+      plane.position = position.clone();
+      plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+      plane.isPickable = false;
+
+      var material = new BABYLON.StandardMaterial(name + "-material", scene);
+      material.diffuseColor = coerceColor3(color, BABYLON.Color3.FromHexString("#111111"));
+      material.emissiveColor = material.diffuseColor.scale(0.6);
+      material.specularColor = new BABYLON.Color3(0, 0, 0);
+      material.backFaceCulling = false;
+      material.disableLighting = true;
+      if (alpha !== undefined) {
+        material.alpha = alpha;
+      }
+      plane.material = material;
+
+      return plane;
+    }
+
+    function pointColorAt(color, index, fallback) {
+      if (Array.isArray(color) && color.length && typeof color[0] === "string") {
+        return color[index] || fallback;
+      }
+      if (color && typeof color === "object" && !Array.isArray(color)) {
+        if (typeof color[index] === "string") {
+          return color[index];
+        }
+        var values = Object.values(color);
+        if (values.length && typeof values[0] === "string") {
+          return values[index] || fallback;
+        }
+      }
+      return color || fallback;
+    }
+
     function meshRadius(mesh) {
       if (!mesh || !mesh.getBoundingInfo) {
         return 1;
@@ -194,6 +231,26 @@ HTMLWidgets.widget({
       }
 
       return radius;
+    }
+
+    function pointCloudRadius(points) {
+      if (!points || !points.length) {
+        return 1;
+      }
+
+      var min = new BABYLON.Vector3(Infinity, Infinity, Infinity);
+      var max = new BABYLON.Vector3(-Infinity, -Infinity, -Infinity);
+      points.forEach(function(coords) {
+        min.x = Math.min(min.x, coords[0]);
+        min.y = Math.min(min.y, coords[1]);
+        min.z = Math.min(min.z, coords[2]);
+        max.x = Math.max(max.x, coords[0]);
+        max.y = Math.max(max.y, coords[1]);
+        max.z = Math.max(max.z, coords[2]);
+      });
+
+      var radius = max.subtract(min).length() / 2;
+      return !isFinite(radius) || radius <= 0 ? 1 : radius;
     }
 
     function toCoordinateArray(vector) {
@@ -577,6 +634,40 @@ HTMLWidgets.widget({
             if (!primaryMesh) {
               primaryMesh = babylonMesh;
             }
+            scheduleFrame();
+          } else if (primitive.type === "points3d") {
+            var pointSize = primitive.size || 0.02;
+            var boundsRadius = pointCloudRadius(primitive.points);
+            var billboardSize = Math.max(boundsRadius * pointSize, 0.001);
+            primitive.points.forEach(function(coords, idx) {
+              var pointColor = pointColorAt(primitive.color, idx, "#111111");
+              createPointBillboard(
+                new BABYLON.Vector3(coords[0], coords[1], coords[2]),
+                pointColor,
+                primitive.alpha,
+                billboardSize,
+                name + "-point-" + idx
+              );
+            });
+            scheduleFrame();
+          } else if (primitive.type === "spheres3d") {
+            var sphereRadius = primitive.radius || 0.03;
+            var sphereBoundsRadius = pointCloudRadius(primitive.points);
+            var scatterRadius = Math.max(sphereBoundsRadius * sphereRadius, 0.001);
+            var templates = {};
+            primitive.points.forEach(function(coords, idx) {
+              var sphereColor = pointColorAt(primitive.color, idx, "#666666");
+              if (!templates[sphereColor]) {
+                var templatePrimitive = Object.assign({}, primitive, {color: sphereColor});
+                var template = BABYLON.MeshBuilder.CreateSphere(name + "-template-" + Object.keys(templates).length, {diameter: scatterRadius * 2}, scene);
+                template.isVisible = false;
+                applyMaterial(template, templatePrimitive);
+                templates[sphereColor] = template;
+              }
+              var instance = templates[sphereColor].createInstance(name + "-sphere-" + idx);
+              instance.position = new BABYLON.Vector3(coords[0], coords[1], coords[2]);
+              instance.isPickable = false;
+            });
             scheduleFrame();
           } else if (primitive.type === "mesh") {
             pendingImports += 1;

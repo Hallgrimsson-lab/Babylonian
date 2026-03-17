@@ -9,6 +9,7 @@ as_babylon_mesh(
   name = "mesh",
   color = NULL,
   alpha = NULL,
+  specularity = NULL,
   reverse_winding = TRUE,
   ...
 )
@@ -18,9 +19,14 @@ as_babylon_mesh(
 
 \item{name}{Optional mesh name.}
 
-\item{color}{Optional mesh color.}
+\item{color}{Optional mesh color. Supports R color names, hex strings,
+palette indices, and RGB vectors.}
 
 \item{alpha}{Optional mesh opacity.}
+
+\item{specularity}{Optional Babylon specular intensity. Numeric scalars are
+converted to grayscale specular colors in the 0-1 range; RGB vectors and
+hex strings are also accepted.}
 
 \item{reverse_winding}{Whether to reverse triangle winding when converting
 the mesh. Enabled by default to match common `mesh3d` orientation with

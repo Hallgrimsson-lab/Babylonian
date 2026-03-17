@@ -21,6 +21,5 @@ bounding box.}
 [as_babylon_mesh()] and the Babylon mesh renderer.}
 }
 \description{
-Provides a direct Babylonian `plot3d()` method for `mesh3d` objects so
-Morpho-imported meshes can be rendered without explicit conversion.
+Plot a `mesh3d` object with BabylonJS
 }
