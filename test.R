@@ -17,7 +17,6 @@ mesh <- file2mesh("../../PhenomicsLabs/backups/alignedRegisteredMeshes2/13010101
 create_pose_3d(mesh)
 
 #now reuse the pose
-pose <- par3d()
 par3d(zoom = parZoom, userMatrix = parUserMatrix)
 
 plot3d(mesh, color = "steelblue", alpha = 0.7, specularity = 0.25)
@@ -41,3 +40,22 @@ digitize_landmarks(
 )
 
 create_pose_3d(mesh)
+
+
+segments3d(rbind(
+  c(0, 0, 0), c(1, 0, 0),
+  c(0, 1, 0), c(0, 1, 1)
+), add = T)
+
+planes3d(0, 0, 1, -0.5, color = "tomato", alpha = 0.3)
+
+shade3d(mesh, color = "gray70")
+
+
+plot3d(mesh)
+segments3d(rbind(
+  c(0, 0, 0), c(1, 0, 0),
+  c(0, 1, 0), c(0, 1, 1)
+))
+
+

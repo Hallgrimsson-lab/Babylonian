@@ -101,7 +101,7 @@ as_babylon_mesh <- function(
   name = "mesh",
   color = NULL,
   alpha = NULL,
-  specularity = NULL,
+  specularity = "black",
   reverse_winding = TRUE,
   ...
 ) {
@@ -199,8 +199,11 @@ plot3d.matrix <- function(
 #'   `name`.
 #'
 #' @export
-plot3d.babylon_mesh <- function(x, add = FALSE, axes = TRUE, nticks = 5, ...) {
+plot3d.babylon_mesh <- function(x, add = FALSE, axes = TRUE, nticks = 5, specularity = "black", ...) {
   args <- list(...)
+  if (!is.null(specularity) && is.null(args$specularity)) {
+    args$specularity <- specularity
+  }
   x <- modify_babylon_mesh(x, args)
   append_current_scene(x, add = add, axes = axes, nticks = nticks)
 }
@@ -300,7 +303,7 @@ spheres3d <- function(
   radius = 0.03,
   color = "gray40",
   alpha = 1,
-  specularity = 0.1,
+  specularity = "black",
   add = TRUE,
   axes = TRUE,
   nticks = 5
@@ -318,6 +321,134 @@ spheres3d <- function(
   )
 
   append_current_scene(spheres, add = add, axes = axes, nticks = nticks)
+}
+
+#' Render connected 3D line segments
+#'
+#' Consecutive point pairs define each segment, so rows 1-2, 3-4, and so on are
+#' rendered as independent line segments.
+#'
+#' @param x,y,z Segment endpoint coordinates.
+#' @param color Segment color.
+#' @param alpha Reserved for future transparency support.
+#' @param width Relative segment width hint. Babylon line meshes are rendered as
+#'   lightweight screen-space lines, so this is currently informational only.
+#' @param add Whether to add the object to the current Babylonian scene. Use
+#'   `add = FALSE` to start a fresh scene.
+#' @param axes Whether to draw lightweight scene axes, ticks, labels, and a
+#'   bounding box.
+#' @param nticks Approximate number of tick marks per axis when `axes = TRUE`.
+#'
+#' @export
+segments3d <- function(
+  x,
+  y = NULL,
+  z = NULL,
+  color = "black",
+  alpha = 1,
+  width = 1,
+  add = TRUE,
+  axes = TRUE,
+  nticks = 5
+) {
+  points <- xyz_matrix(x, y, z)
+
+  if (nrow(points) %% 2L != 0L) {
+    stop("`segments3d()` requires an even number of points; segments are drawn from row pairs.", call. = FALSE)
+  }
+
+  segments <- structure(
+    list(
+      type = "segments3d",
+      points = unname(points),
+      color = normalize_babylon_color(color),
+      alpha = alpha,
+      width = width
+    ),
+    class = c("babylon_segments", "list")
+  )
+
+  append_current_scene(segments, add = add, axes = axes, nticks = nticks)
+}
+
+#' Render one or more clipping-style planes
+#'
+#' Planes are specified by coefficients `(a, b, c, d)` for equations of the
+#' form `a*x + b*y + c*z + d = 0`.
+#'
+#' @param ... Plane coefficients. Supply either four numeric vectors
+#'   `a, b, c, d` of equal length or a matrix/data frame with four columns.
+#' @param color Plane color.
+#' @param alpha Plane opacity.
+#' @param size Plane sheet size in world units. If `NULL`, Babylonian uses a
+#'   scene-relative fallback.
+#' @param add Whether to add the object to the current Babylonian scene. Use
+#'   `add = FALSE` to start a fresh scene.
+#' @param axes Whether to draw lightweight scene axes, ticks, labels, and a
+#'   bounding box.
+#' @param nticks Approximate number of tick marks per axis when `axes = TRUE`.
+#'
+#' @export
+planes3d <- function(..., color = "gray70", alpha = 0.4, size = NULL, add = TRUE, axes = TRUE, nticks = 5) {
+  coeffs <- plane_coefficients(...)
+  planes <- list(
+    type = "planes3d",
+    coefficients = unname(coeffs),
+    color = normalize_babylon_color(color),
+    alpha = alpha,
+    size = if (is.null(size)) NULL else as.numeric(size[[1]])
+  )
+
+  append_current_scene(planes, add = add, axes = axes, nticks = nticks)
+}
+
+#' Shade a 3D surface or mesh
+#'
+#' This mirrors the feel of `rgl::shade3d()` by adding a shaded surface object
+#' to the current scene by default.
+#'
+#' @param x A `mesh3d`, `babylon_mesh`, or compatible Babylonian mesh object.
+#' @param color Optional surface color.
+#' @param alpha Optional surface opacity.
+#' @param specularity Optional surface specularity.
+#' @param add Whether to add the object to the current Babylonian scene. Use
+#'   `add = FALSE` to start a fresh scene.
+#' @param axes Whether to draw lightweight scene axes, ticks, labels, and a
+#'   bounding box.
+#' @param nticks Approximate number of tick marks per axis when `axes = TRUE`.
+#' @param ... Additional mesh graphical parameters.
+#'
+#' @export
+shade3d <- function(
+  x,
+  color = NULL,
+  alpha = NULL,
+  specularity = "black",
+  add = TRUE,
+  axes = TRUE,
+  nticks = 5,
+  ...
+) {
+  if (inherits(x, "mesh3d")) {
+    mesh <- do.call(
+      as_babylon_mesh,
+      c(list(x = x, color = color, alpha = alpha, specularity = specularity), list(...))
+    )
+    return(plot3d.babylon_mesh(mesh, add = add, axes = axes, nticks = nticks))
+  }
+
+  if (inherits(x, "babylon_mesh")) {
+    args <- c(list(...), list(color = color, alpha = alpha, specularity = specularity))
+    args <- args[!vapply(args, is.null, logical(1))]
+    return(do.call(plot3d.babylon_mesh, c(list(x = x, add = add, axes = axes, nticks = nticks), args)))
+  }
+
+  if (is.list(x) && identical(x$type, "mesh3d")) {
+    mesh <- normalize_scene_object(x)
+    return(plot3d.babylon_mesh(mesh, add = add, axes = axes, nticks = nticks, color = color, alpha = alpha, specularity = specularity, ...))
+  }
+
+  stop("`shade3d()` currently supports `mesh3d` and `babylon_mesh` objects.", call. = FALSE)
 }
 
 #' Start an interactive landmark digitizer on a Babylon mesh
@@ -426,7 +557,9 @@ normalize_scene_object <- function(x) {
     if (!is.null(x$color) && length(x$color) == 1L) {
       x$color <- normalize_babylon_color(x$color)
     }
-    if (!is.null(x$specularity)) {
+    if (is.null(x$specularity) && !inherits(x, "babylon_points")) {
+      x$specularity <- normalize_babylon_specularity("black")
+    } else if (!is.null(x$specularity)) {
       x$specularity <- normalize_babylon_specularity(x$specularity)
     }
     return(x)
@@ -436,7 +569,9 @@ normalize_scene_object <- function(x) {
     if (!is.null(x$color)) {
       x$color <- normalize_babylon_color(x$color)
     }
-    if (!is.null(x$specularity)) {
+    if (is.null(x$specularity) && !identical(x$type, "segments3d")) {
+      x$specularity <- normalize_babylon_specularity("black")
+    } else if (!is.null(x$specularity)) {
       x$specularity <- normalize_babylon_specularity(x$specularity)
     }
   }
@@ -833,6 +968,46 @@ normalize_point_colors <- function(color, n) {
   }
 
   unname(vapply(color, normalize_babylon_color, character(1)))
+}
+
+plane_coefficients <- function(...) {
+  args <- list(...)
+
+  if (length(args) == 1L) {
+    x <- args[[1]]
+    if (is.data.frame(x)) {
+      x <- as.matrix(x)
+    }
+    if (is.matrix(x)) {
+      if (ncol(x) != 4L) {
+        stop("Plane coefficient matrices must have exactly four columns.", call. = FALSE)
+      }
+      storage.mode(x) <- "numeric"
+      return(x)
+    }
+  }
+
+  if (length(args) != 4L) {
+    stop("Supply planes as four coefficient vectors `(a, b, c, d)` or a matrix with four columns.", call. = FALSE)
+  }
+
+  lens <- vapply(args, length, integer(1))
+  if (length(unique(lens)) != 1L) {
+    stop("Plane coefficient vectors must all have the same length.", call. = FALSE)
+  }
+
+  coeffs <- cbind(
+    as.numeric(args[[1]]),
+    as.numeric(args[[2]]),
+    as.numeric(args[[3]]),
+    as.numeric(args[[4]])
+  )
+
+  if (ncol(coeffs) != 4L) {
+    stop("Plane coefficients must define four values per plane.", call. = FALSE)
+  }
+
+  coeffs
 }
 
 run_landmark_gadget <- function(widget, n = NULL) {

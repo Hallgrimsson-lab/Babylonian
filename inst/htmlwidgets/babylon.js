@@ -724,6 +724,72 @@ HTMLWidgets.widget({
       return line;
     }
 
+    function createSegmentLines(primitive, name) {
+      var lineColor = coerceColor3(primitive.color, BABYLON.Color3.FromHexString("#111111"));
+      for (var i = 0; i < primitive.points.length; i += 2) {
+        var segment = BABYLON.MeshBuilder.CreateLines(
+          name + "-segment-" + (i / 2),
+          {
+            points: [
+              new BABYLON.Vector3(primitive.points[i][0], primitive.points[i][1], primitive.points[i][2]),
+              new BABYLON.Vector3(primitive.points[i + 1][0], primitive.points[i + 1][1], primitive.points[i + 1][2])
+            ],
+            updatable: false
+          },
+          scene
+        );
+        segment.color = lineColor;
+        segment.isPickable = false;
+      }
+    }
+
+    function alignPlaneToNormal(mesh, normal) {
+      var from = new BABYLON.Vector3(0, 0, 1);
+      var to = normalizeVector(normal);
+      var dot = BABYLON.Vector3.Dot(from, to);
+
+      if (dot > 0.999999) {
+        mesh.rotationQuaternion = BABYLON.Quaternion.Identity();
+        return;
+      }
+
+      if (dot < -0.999999) {
+        mesh.rotationQuaternion = BABYLON.Quaternion.RotationAxis(new BABYLON.Vector3(0, 1, 0), Math.PI);
+        return;
+      }
+
+      var axis = BABYLON.Vector3.Cross(from, to);
+      axis.normalize();
+      var angle = Math.acos(Math.max(-1, Math.min(1, dot)));
+      mesh.rotationQuaternion = BABYLON.Quaternion.RotationAxis(axis, angle);
+    }
+
+    function createPlaneMesh(coeffs, primitive, name) {
+      var a = Number(coeffs[0]);
+      var b = Number(coeffs[1]);
+      var c = Number(coeffs[2]);
+      var d = Number(coeffs[3]);
+      var normal = new BABYLON.Vector3(a, b, c);
+      var normalLengthSq = BABYLON.Vector3.Dot(normal, normal);
+
+      if (!isFinite(normalLengthSq) || normalLengthSq <= 1e-12) {
+        return null;
+      }
+
+      var planeSize = primitive.size;
+      if (!isFinite(planeSize) || planeSize <= 0) {
+        planeSize = currentSceneBounds && currentSceneBounds.radius ? currentSceneBounds.radius * 4 : 2;
+      }
+
+      var plane = BABYLON.MeshBuilder.CreatePlane(name, {size: planeSize}, scene);
+      var center = normal.scale(-d / normalLengthSq);
+      plane.position = center;
+      alignPlaneToNormal(plane, normal);
+      applyMaterial(plane, primitive);
+      plane.isPickable = false;
+      return plane;
+    }
+
     function addAxisLabel(text, point, color) {
       var label = document.createElement("div");
       label.textContent = text;
@@ -942,6 +1008,9 @@ HTMLWidgets.widget({
               );
             });
             scheduleFrame();
+          } else if (primitive.type === "segments3d") {
+            createSegmentLines(primitive, name);
+            scheduleFrame();
           } else if (primitive.type === "spheres3d") {
             var sphereRadius = primitive.radius || 0.03;
             var sphereBoundsRadius = pointCloudRadius(primitive.points);
@@ -959,6 +1028,11 @@ HTMLWidgets.widget({
               var instance = templates[sphereColor].createInstance(name + "-sphere-" + idx);
               instance.position = new BABYLON.Vector3(coords[0], coords[1], coords[2]);
               instance.isPickable = false;
+            });
+            scheduleFrame();
+          } else if (primitive.type === "planes3d") {
+            primitive.coefficients.forEach(function(coeffs, idx) {
+              createPlaneMesh(coeffs, primitive, name + "-plane-" + idx);
             });
             scheduleFrame();
           } else if (primitive.type === "mesh") {
