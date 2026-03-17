@@ -18,7 +18,7 @@ create_pose_3d(mesh)
 
 #now reuse the pose
 pose <- par3d()
-par3d(zoom = .05, userMatrix = pose$userMatrix)
+par3d(zoom = parZoom, userMatrix = parUserMatrix)
 
 plot3d(mesh, color = "steelblue", alpha = 0.7, specularity = 0.25)
 plot3d(mesh, color = 2, specularity = c(1, 1, 1))
@@ -39,3 +39,5 @@ digitize_landmarks(
   mesh,
   n = 5
 )
+
+create_pose_3d(mesh)

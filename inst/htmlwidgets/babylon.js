@@ -68,6 +68,9 @@ HTMLWidgets.widget({
     var axisLabelState = [];
     var currentSceneOptions = null;
     var currentSceneBounds = null;
+    var baseCameraState = null;
+    var activeInteractionState = null;
+    var publishViewStateHandle = null;
 
     function clamp01(x) {
       if (!isFinite(x)) {
@@ -253,14 +256,138 @@ HTMLWidgets.widget({
       return !isFinite(radius) || radius <= 0 ? 1 : radius;
     }
 
+    function normalizeVector(v) {
+      var length = v.length();
+      if (!isFinite(length) || length <= 0) {
+        return new BABYLON.Vector3(0, 0, 0);
+      }
+      return v.scale(1 / length);
+    }
+
+    function cross(a, b) {
+      return new BABYLON.Vector3(
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+      );
+    }
+
+    function transpose3(m) {
+      return [
+        [m[0][0], m[1][0], m[2][0]],
+        [m[0][1], m[1][1], m[2][1]],
+        [m[0][2], m[1][2], m[2][2]]
+      ];
+    }
+
+    function multiply3(a, b) {
+      var out = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+      for (var i = 0; i < 3; i++) {
+        for (var j = 0; j < 3; j++) {
+          out[i][j] = 0;
+          for (var k = 0; k < 3; k++) {
+            out[i][j] += a[i][k] * b[k][j];
+          }
+        }
+      }
+      return out;
+    }
+
     function toCoordinateArray(vector) {
       return [vector.x, vector.y, vector.z];
     }
 
+    function clearUiPanel() {
+      uiLayer.style.display = "none";
+      uiLayer.innerHTML = "";
+    }
+
+    function formatRNumber(x) {
+      if (!isFinite(x)) {
+        return "NA_real_";
+      }
+      var value = Number(x);
+      if (value === 0) {
+        return "0";
+      }
+      var rounded = Math.round(value * 10000) / 10000;
+      var text = rounded.toFixed(4).replace(/(?:\.0+|(\.\d*?)0+)$/, "$1");
+      if (text === "-0") {
+        text = "0";
+      }
+      return text;
+    }
+
+    function formatRMatrix(matrix) {
+      return "rbind(\n" + matrix.map(function(row) {
+        return "  c(" + row.map(formatRNumber).join(", ") + ")";
+      }).join(",\n") + "\n)";
+    }
+
+    function formatPoseRCommand(payload) {
+      return [
+        "parZoom <- " + formatRNumber(payload.zoom),
+        "parUserMatrix <- " + formatRMatrix(payload.userMatrix)
+      ].join("\n");
+    }
+
+    function fallbackCopyText(value) {
+      var textarea = document.createElement("textarea");
+      textarea.value = value;
+      textarea.setAttribute("readonly", "readonly");
+      textarea.style.position = "fixed";
+      textarea.style.top = "-1000px";
+      textarea.style.left = "-1000px";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      textarea.setSelectionRange(0, textarea.value.length);
+      var copied = false;
+      try {
+        copied = document.execCommand("copy");
+      } catch (e) {
+        copied = false;
+      }
+      document.body.removeChild(textarea);
+      return copied;
+    }
+
+    function bindCopyButton(button, value) {
+      button.addEventListener("click", function() {
+        var text = typeof value === "function" ? value() : value;
+        var originalLabel = button.textContent;
+
+        function setLabel(label) {
+          button.textContent = label;
+          window.setTimeout(function() {
+            button.textContent = originalLabel;
+          }, 1200);
+        }
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function() {
+            setLabel("Copied");
+          }).catch(function() {
+            if (fallbackCopyText(text)) {
+              setLabel("Copied");
+            } else {
+              setLabel("Copy failed");
+            }
+          });
+          return;
+        }
+
+        if (fallbackCopyText(text)) {
+          setLabel("Copied");
+        } else {
+          setLabel("Copy failed");
+        }
+      });
+    }
+
     function updateDigitizePanel(state) {
       if (!state || state.mode !== "digitize_landmarks") {
-        uiLayer.style.display = "none";
-        uiLayer.innerHTML = "";
+        clearUiPanel();
         return;
       }
 
@@ -275,11 +402,147 @@ HTMLWidgets.widget({
         "<textarea readonly style='width:100%; min-height:96px; resize:vertical; font:inherit; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#f8fafc;'>" + exportValue + "</textarea>" +
         "<button type='button' style='margin-top:8px; border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Copy JSON</button>";
 
-      var button = uiLayer.querySelector("button");
-      button.addEventListener("click", function() {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(exportValue);
-        }
+      bindCopyButton(uiLayer.querySelector("button"), exportValue);
+    }
+
+    function currentPar3dState() {
+      if (!baseCameraState || !currentSceneBounds) {
+        return null;
+      }
+
+      var target = currentSceneBounds.center;
+      var currentOffset = camera.position.subtract(target);
+      var currentUp = camera.upVector.clone();
+
+      var baseForward = normalizeVector(baseCameraState.offset);
+      var baseUp = normalizeVector(baseCameraState.up);
+      var baseRight = normalizeVector(cross(baseUp, baseForward));
+      baseUp = normalizeVector(cross(baseForward, baseRight));
+
+      var currentForward = normalizeVector(currentOffset);
+      var currentUpNorm = normalizeVector(currentUp);
+      var currentRight = normalizeVector(cross(currentUpNorm, currentForward));
+      currentUpNorm = normalizeVector(cross(currentForward, currentRight));
+
+      var baseBasis = [
+        [baseRight.x, baseUp.x, baseForward.x],
+        [baseRight.y, baseUp.y, baseForward.y],
+        [baseRight.z, baseUp.z, baseForward.z]
+      ];
+      var currentBasis = [
+        [currentRight.x, currentUpNorm.x, currentForward.x],
+        [currentRight.y, currentUpNorm.y, currentForward.y],
+        [currentRight.z, currentUpNorm.z, currentForward.z]
+      ];
+      var rotation = multiply3(currentBasis, transpose3(baseBasis));
+      var zoom = baseCameraState.radius / Math.max(camera.radius, 1e-8);
+
+      return {
+        zoom: zoom,
+        userMatrix: [
+          [rotation[0][0], rotation[0][1], rotation[0][2], 0],
+          [rotation[1][0], rotation[1][1], rotation[1][2], 0],
+          [rotation[2][0], rotation[2][1], rotation[2][2], 0],
+          [0, 0, 0, 1]
+        ]
+      };
+    }
+
+    function applyViewOptions(bounds, sceneOptions) {
+      if (!bounds || !sceneOptions || !sceneOptions.view || !baseCameraState) {
+        return;
+      }
+
+      var view = sceneOptions.view;
+      var zoom = Number(view.zoom);
+      if (!isFinite(zoom) || zoom <= 0) {
+        zoom = 1;
+      }
+
+      var userMatrix = view.userMatrix;
+      if (!Array.isArray(userMatrix) || userMatrix.length < 3) {
+        camera.radius = baseCameraState.radius / zoom;
+        return;
+      }
+
+      var target = bounds.center;
+      var defaultOffset = baseCameraState.offset.clone();
+
+      function rotateVector(v) {
+        return new BABYLON.Vector3(
+          userMatrix[0][0] * v.x + userMatrix[0][1] * v.y + userMatrix[0][2] * v.z,
+          userMatrix[1][0] * v.x + userMatrix[1][1] * v.y + userMatrix[1][2] * v.z,
+          userMatrix[2][0] * v.x + userMatrix[2][1] * v.y + userMatrix[2][2] * v.z
+        );
+      }
+
+      var rotatedOffset = rotateVector(defaultOffset);
+      var rotatedDirection = normalizeVector(rotatedOffset);
+      if (!isFinite(rotatedDirection.x) || !isFinite(rotatedDirection.y) || !isFinite(rotatedDirection.z) ||
+          (rotatedDirection.x === 0 && rotatedDirection.y === 0 && rotatedDirection.z === 0)) {
+        rotatedDirection = normalizeVector(defaultOffset);
+      }
+      var radius = baseCameraState.radius / zoom;
+      var safeOffset = rotatedDirection.scale(baseCameraState.radius);
+
+      camera.setTarget(target);
+      camera.alpha = Math.atan2(safeOffset.z, safeOffset.x);
+      camera.beta = Math.acos(
+        Math.max(-0.999999, Math.min(0.999999, safeOffset.y / Math.max(baseCameraState.radius, 1e-8)))
+      );
+      camera.radius = radius;
+    }
+
+    function updatePosePanel(state, payload) {
+      if (!state || state.mode !== "pose_3d" || !payload) {
+        clearUiPanel();
+        return;
+      }
+
+      var exportValue = formatPoseRCommand(payload);
+      uiLayer.style.display = "block";
+      uiLayer.innerHTML =
+        "<div style='font-weight:700; margin-bottom:6px;'>Scene View</div>" +
+        "<div style='margin-bottom:6px; color:#334155;'>Rotate or zoom the scene to update the pose.</div>" +
+        "<textarea readonly style='width:100%; min-height:128px; resize:vertical; font:inherit; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#f8fafc;'>" + exportValue + "</textarea>" +
+        "<button type='button' style='margin-top:8px; border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Copy R Code</button>";
+
+      bindCopyButton(uiLayer.querySelector("button"), exportValue);
+    }
+
+    function publishPoseState(state) {
+      if (!state || state.mode !== "pose_3d") {
+        return;
+      }
+
+      var payload = currentPar3dState();
+      if (!payload) {
+        return;
+      }
+
+      updatePosePanel(state, payload);
+
+      if (HTMLWidgets.shinyMode && state.widgetId) {
+        Shiny.setInputValue(
+          state.widgetId + "_par3d",
+          JSON.stringify(payload),
+          {priority: "event"}
+        );
+      }
+    }
+
+    function schedulePoseStatePublish() {
+      if (!activeInteractionState || activeInteractionState.mode !== "pose_3d") {
+        return;
+      }
+
+      if (publishViewStateHandle !== null) {
+        return;
+      }
+
+      publishViewStateHandle = window.requestAnimationFrame(function() {
+        publishViewStateHandle = null;
+        publishPoseState(activeInteractionState);
       });
     }
 
@@ -300,8 +563,29 @@ HTMLWidgets.widget({
     }
 
     function initializeInteraction(interaction, primaryMesh) {
+      activeInteractionState = null;
+
+      if (digitizeObserver) {
+        scene.onPointerObservable.remove(digitizeObserver);
+        digitizeObserver = null;
+      }
+
+      if (publishViewStateHandle !== null) {
+        window.cancelAnimationFrame(publishViewStateHandle);
+        publishViewStateHandle = null;
+      }
+
+      if (interaction && interaction.mode === "pose_3d") {
+        activeInteractionState = {
+          mode: interaction.mode,
+          widgetId: el.id || null
+        };
+        schedulePoseStatePublish();
+        return activeInteractionState;
+      }
+
       if (!interaction || interaction.mode !== "digitize_landmarks" || !primaryMesh) {
-        updateDigitizePanel(null);
+        clearUiPanel();
         return null;
       }
 
@@ -328,10 +612,6 @@ HTMLWidgets.widget({
           );
           state.markers.push(fixedMarker);
         });
-      }
-
-      if (digitizeObserver) {
-        scene.onPointerObservable.remove(digitizeObserver);
       }
 
       digitizeObserver = scene.onPointerObservable.add(function(pointerInfo) {
@@ -400,6 +680,12 @@ HTMLWidgets.widget({
       camera.minZ = Math.max(radius / 1000, 0.01);
       camera.maxZ = Math.max(radius * 100, 1000);
       currentSceneBounds = {min: min.clone(), max: max.clone(), center: center.clone(), radius: radius};
+      baseCameraState = {
+        target: center.clone(),
+        radius: camera.radius,
+        offset: camera.position.subtract(center),
+        up: camera.upVector.clone()
+      };
     }
 
     function clearSceneDecorations() {
@@ -565,6 +851,10 @@ HTMLWidgets.widget({
     window.addEventListener("resize", function () {
       engine.resize();
       updateAxisLabels();
+      schedulePoseStatePublish();
+    });
+    camera.onViewMatrixChangedObservable.add(function() {
+      schedulePoseStatePublish();
     });
 
     return {
@@ -583,7 +873,9 @@ HTMLWidgets.widget({
           sceneUpdated = true;
           if (pendingImports === 0) {
             frameScene();
+            applyViewOptions(currentSceneBounds, currentSceneOptions);
             renderAxes(currentSceneBounds, currentSceneOptions);
+            schedulePoseStatePublish();
           }
         }
 
@@ -696,7 +988,9 @@ HTMLWidgets.widget({
 
         if (sceneUpdated && pendingImports === 0) {
           frameScene();
+          applyViewOptions(currentSceneBounds, currentSceneOptions);
           renderAxes(currentSceneBounds, currentSceneOptions);
+          schedulePoseStatePublish();
         }
 
       },

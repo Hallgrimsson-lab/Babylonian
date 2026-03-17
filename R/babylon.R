@@ -370,6 +370,7 @@ digitize_landmarks <- function(
     height = height,
     elementId = elementId
   )
+  widget$x$scene$view <- NULL
 
   if (!interactive()) {
     return(widget)
@@ -398,6 +399,8 @@ create_pose_3d <- function(x, width = NULL, height = NULL, ...) {
       list(...)
     )
   )
+  widget$x$interaction <- list(mode = "pose_3d")
+  widget$x$scene$view <- NULL
 
   if (!is.null(width)) {
     widget$width <- width
@@ -601,7 +604,9 @@ normalize_scene <- function(x) {
     x$nticks <- as.integer(x$nticks)
   }
 
-  if (!is.null(x$view)) {
+  if (is.null(x$view)) {
+    x$view <- serialize_par3d(.babylon_state$par3d)
+  } else {
     x$view <- normalize_view(x$view)
   }
 
@@ -620,7 +625,8 @@ append_current_scene <- function(object, add = TRUE, axes = TRUE, nticks = 5) {
       objects = list(),
       scene = list(
         axes = isTRUE(axes),
-        nticks = as.integer(nticks)
+        nticks = as.integer(nticks),
+        view = serialize_par3d(.babylon_state$par3d)
       )
     )
   } else {
@@ -931,13 +937,7 @@ run_pose_gadget <- function(widget) {
 
   ui <- miniUI::miniPage(
     miniUI::gadgetTitleBar("Pose 3D Scene"),
-    miniUI::miniContentPanel(
-      widget,
-      shiny::div(
-        style = "padding-top: 10px; font-family: monospace;",
-        shiny::textOutput("pose_status")
-      )
-    )
+    miniUI::miniContentPanel(widget)
   )
 
   server <- function(input, output, session) {
@@ -946,15 +946,6 @@ run_pose_gadget <- function(widget) {
       zoom = 0.05,
       userMatrix = diag(4)
     )
-
-    output$pose_status <- shiny::renderText({
-      state <- current_pose_input(input[[par3d_input]], fallback = initial_pose)
-      paste0(
-        "zoom: ", format(round(state$zoom, 4), trim = TRUE),
-        " | userMatrix[1, ]: ",
-        paste(format(round(state$userMatrix[1, ], 4), trim = TRUE), collapse = " ")
-      )
-    })
 
     shiny::observeEvent(input[[par3d_input]], {
       value <- input[[par3d_input]]
