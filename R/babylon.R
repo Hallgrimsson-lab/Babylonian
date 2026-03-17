@@ -914,9 +914,8 @@ clear_scene3d <- function() {
 #' Save a Babylonian scene snapshot to an image file
 #'
 #' Captures a rendered Babylonian scene and writes it to an image file via
-#' `webshot2`. Because screenshots are raster images, the output is a 2D image
-#' of the current 3D view. When `widget` is omitted, the current in-memory
-#' scene accumulator is used.
+#' `webshot2`. When `widget` is omitted, the current in-memory scene
+#' accumulator is used.
 #'
 #' @param filename Output image path.
 #' @param widget Optional Babylonian htmlwidget. If omitted, the current scene
@@ -961,11 +960,6 @@ snapshot3d <- function(filename = "snapshot3d.png", widget = NULL, vwidth = 800,
 
   invisible(filename)
 }
-
-
-#' @rdname snapshot3d
-#' @export
-snapshot2d <- snapshot3d
 
 #' @rdname snapshot3d
 #' @export

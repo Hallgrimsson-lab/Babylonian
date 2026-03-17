@@ -2,7 +2,6 @@
 % Please edit documentation in R/babylon.R
 \name{snapshot3d}
 \alias{snapshot3d}
-\alias{snapshot2d}
 \alias{rgl.snapshot}
 \alias{snapshot}
 \title{Save a Babylonian scene snapshot to an image file}
@@ -15,8 +14,6 @@ snapshot3d(
   delay = 0.5,
   ...
 )
-
-snapshot2d <- snapshot3d
 
 rgl.snapshot <- snapshot3d
 
@@ -38,7 +35,6 @@ from the `plot3d()` accumulator is rendered.}
 }
 \description{
 Captures a rendered Babylonian scene and writes it to an image file via
-`webshot2`. Because screenshots are raster images, the output is a 2D image
-of the current 3D view. When `widget` is omitted, the current in-memory
-scene accumulator is used.
+`webshot2`. When `widget` is omitted, the current in-memory scene
+accumulator is used.
 }

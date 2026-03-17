@@ -106,12 +106,12 @@ spheres3d(pts, radius = 0.02, color = rep(c("steelblue", "goldenrod"), length.ou
 ```
 
 
-To save a static screenshot of the current scene, use `snapshot2d()` or `snapshot3d()` (plus
-`rgl`-style aliases `rgl.snapshot()` and `snapshot()` for `snapshot3d()`):
+To save a static screenshot of the current scene, use `snapshot3d()` (or the
+`rgl`-style aliases `rgl.snapshot()` and `snapshot()`):
 
 ```r
 plot3d(your_morpho_mesh)
-snapshot2d("scene.png")
+snapshot3d("scene.png")
 ```
 
 ## View state

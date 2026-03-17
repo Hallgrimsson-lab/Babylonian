@@ -77,7 +77,6 @@ testthat::test_that("mesh argument mutation applies compatibility layer", {
 
 
 testthat::test_that("snapshot aliases map to snapshot3d", {
-  testthat::expect_identical(snapshot2d, snapshot3d)
   testthat::expect_identical(snapshot, snapshot3d)
   testthat::expect_identical(rgl.snapshot, snapshot3d)
 })
