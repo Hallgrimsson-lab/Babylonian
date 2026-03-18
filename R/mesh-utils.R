@@ -90,6 +90,45 @@ as_babylon_mesh <- function(
   structure(mesh, class = c("babylon_mesh", "list"))
 }
 
+#' Create a morph-target-enabled Babylon mesh
+#'
+#' This wraps a reference mesh together with a same-topology morph target mesh
+#' so BabylonJS can interpolate between them with a numeric influence value.
+#'
+#' @param x A `mesh3d` or `babylon_mesh` object used as the base mesh.
+#' @param target A `mesh3d` or `babylon_mesh` object with matching topology.
+#' @param influence Initial morph-target influence.
+#' @param ... Additional graphical parameters forwarded to [as_babylon_mesh()]
+#'   or applied to an existing `babylon_mesh`.
+#'
+#' @export
+morph_target3d <- function(x, target, influence = 0, ...) {
+  if (inherits(x, "mesh3d")) {
+    mesh <- do.call(as_babylon_mesh, c(list(x = x), list(...)))
+  } else if (inherits(x, "babylon_mesh")) {
+    mesh <- modify_babylon_mesh(x, list(...))
+  } else if (is.list(x) && identical(x$type, "mesh3d")) {
+    mesh <- normalize_scene_object(x)
+  } else {
+    stop("`x` must be a `mesh3d` or `babylon_mesh` object.", call. = FALSE)
+  }
+
+  target_mesh <- normalize_morph_target_mesh(target, arg = "target")
+  validate_matching_mesh_topology(mesh, target_mesh, "x", "target")
+
+  mesh$morph_target <- normalize_morph_target_spec(
+    list(
+      name = paste0(mesh$name %||% "mesh", "-morph"),
+      vertices = target_mesh$vertices,
+      influence = influence
+    ),
+    base_vertices = mesh$vertices,
+    base_indices = mesh$indices
+  )
+
+  structure(mesh, class = c("babylon_mesh", "list"))
+}
+
 xyz_matrix <- function(x, y = NULL, z = NULL) {
   if (is.matrix(x)) {
     return(validate_xyz_matrix(x))
@@ -204,6 +243,69 @@ mesh_vertex_matrix <- function(x) {
 
 flatten_vertex_matrix <- function(x) {
   as.numeric(t(unname(x)))
+}
+
+normalize_morph_target_mesh <- function(x, arg = "target") {
+  mesh <- normalize_scene_object(x)
+
+  if (!is.list(mesh) || !identical(mesh$type, "mesh3d")) {
+    stop(sprintf("`%s` must be a `mesh3d` or `babylon_mesh` object.", arg), call. = FALSE)
+  }
+
+  mesh
+}
+
+validate_matching_mesh_topology <- function(reference, target, reference_arg = "reference", target_arg = "target") {
+  reference_vertices <- mesh_vertex_matrix(reference)
+  target_vertices <- mesh_vertex_matrix(target)
+
+  if (nrow(reference_vertices) != nrow(target_vertices)) {
+    stop("`", reference_arg, "` and `", target_arg, "` must contain the same number of vertices.", call. = FALSE)
+  }
+
+  if (!identical(reference$indices, target$indices)) {
+    stop("`", reference_arg, "` and `", target_arg, "` must use identical triangle topology.", call. = FALSE)
+  }
+
+  invisible(TRUE)
+}
+
+normalize_morph_target_spec <- function(x, base_vertices, base_indices) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+
+  if (!is.list(x)) {
+    stop("`morph_target` must be a list.", call. = FALSE)
+  }
+
+  vertices <- x$vertices %||% x$positions %||% NULL
+  if (is.matrix(vertices)) {
+    vertices <- flatten_vertex_matrix(vertices)
+  }
+
+  if (!is.numeric(vertices) || !length(vertices) || any(!is.finite(vertices))) {
+    stop("`morph_target$vertices` must be a finite numeric vertex array.", call. = FALSE)
+  }
+
+  if (length(vertices) != length(base_vertices)) {
+    stop("`morph_target$vertices` must have the same length as the base mesh vertex array.", call. = FALSE)
+  }
+
+  list(
+    name = if (is.null(x$name)) NULL else as.character(x$name[[1]]),
+    vertices = as.numeric(vertices),
+    influence = normalize_morph_influence(x$influence %||% 0)
+  )
+}
+
+normalize_morph_influence <- function(x) {
+  value <- as.numeric(x[[1]])
+  if (!is.finite(value)) {
+    stop("`influence` must be a finite numeric scalar.", call. = FALSE)
+  }
+
+  value
 }
 
 vertex_normals_from_mesh <- function(x) {

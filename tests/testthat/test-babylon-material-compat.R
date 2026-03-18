@@ -1,5 +1,15 @@
 context("babylon material compatibility")
 
+make_test_mesh3d <- function(vertices, faces = matrix(c(1, 2, 3), nrow = 3)) {
+  structure(
+    list(
+      vb = rbind(t(vertices), rep(1, nrow(vertices))),
+      it = faces
+    ),
+    class = "mesh3d"
+  )
+}
+
 testthat::test_that("named colors normalize to hex", {
   testthat::expect_identical(normalize_babylon_color("red"), "#FF0000")
   testthat::expect_identical(normalize_babylon_color("#123456"), "#123456")
@@ -121,6 +131,286 @@ testthat::test_that("meshes can carry advanced materials and custom vertex attri
   testthat::expect_identical(mesh$material$type, "pbr")
   testthat::expect_equal(mesh$vertex_attributes$comparisonPosition$size, 3L)
   testthat::expect_equal(length(mesh$vertex_attributes$comparisonPosition$data), 9L)
+})
+
+testthat::test_that("morph_target3d stores same-topology morph targets", {
+  reference <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0),
+      c(0, 1, 0)
+    )
+  )
+  target <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0.5),
+      c(0, 1, 0.25)
+    )
+  )
+
+  mesh <- morph_target3d(reference, target, influence = 0.3, color = "gray70")
+
+  testthat::expect_s3_class(mesh, "babylon_mesh")
+  testthat::expect_true(is.list(mesh$morph_target))
+  testthat::expect_equal(mesh$morph_target$influence, 0.3)
+  testthat::expect_equal(length(mesh$morph_target$vertices), 9L)
+})
+
+testthat::test_that("morph_target3d validates mesh topology", {
+  reference <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0),
+      c(0, 1, 0)
+    )
+  )
+  target <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0),
+      c(0, 1, 0),
+      c(0, 0, 1)
+    ),
+    faces = matrix(c(1, 2, 3), nrow = 3)
+  )
+
+  testthat::expect_error(
+    morph_target3d(reference, target),
+    "same number of vertices"
+  )
+})
+
+testthat::test_that("orbit_path3d returns normalized view states", {
+  par3d(zoom = 0.8, userMatrix = diag(4), bg = "white")
+  path <- orbit_path3d(n = 4, axis = "z", turns = 0.5, zoom = 1.25)
+
+  testthat::expect_length(path, 4L)
+  testthat::expect_equal(path[[1]]$zoom, 1.25)
+  testthat::expect_identical(dim(path[[1]]$userMatrix), c(4L, 4L))
+  testthat::expect_identical(path[[1]]$bg, "#FFFFFF")
+})
+
+testthat::test_that("apply_scene_state updates the stored base view for later animation paths", {
+  widget <- babylon(data = list(list(type = "sphere", diameter = 1)))
+  expected_user_matrix <- matrix(
+    c(
+      0, 0, 1, 0,
+      0, 1, 0, 0,
+      -1, 0, 0, 0,
+      0, 0, 0, 1
+    ),
+    nrow = 4,
+    byrow = TRUE
+  )
+  state <- list(
+    view = list(
+      zoom = 1.4,
+      userMatrix = expected_user_matrix,
+      bg = "#112233"
+    ),
+    objects = list()
+  )
+
+  apply_scene_state(widget, state = state)
+  path <- orbit_path3d(n = 1)
+
+  testthat::expect_equal(path[[1]]$zoom, 1.4)
+  testthat::expect_equal(path[[1]]$userMatrix, expected_user_matrix)
+  testthat::expect_identical(path[[1]]$bg, "#112233")
+})
+
+testthat::test_that("par3d and bg3d persist the scene background color", {
+  old_view <- par3d()
+  on.exit(par3d(zoom = old_view$zoom, userMatrix = old_view$userMatrix, bg = old_view$bg), add = TRUE)
+
+  updated <- par3d(bg = "black")
+  testthat::expect_identical(updated$bg, "#000000")
+  testthat::expect_identical(bg3d(), "#000000")
+
+  serialized <- serialize_par3d(updated)
+  testthat::expect_identical(serialized$bg, "#000000")
+  testthat::expect_identical(deserialize_par3d(serialized)$bg, "#000000")
+})
+
+testthat::test_that("morph_path3d returns eased numeric sequences", {
+  path <- morph_path3d(n = 5, from = 0, to = 1, easing = "ease_in_out")
+
+  testthat::expect_equal(length(path), 5L)
+  testthat::expect_equal(path[[1]], 0)
+  testthat::expect_equal(path[[5]], 1)
+  testthat::expect_true(all(diff(path) >= 0))
+})
+
+testthat::test_that("render_frames3d applies view and morph frames with a custom snapshotter", {
+  reference <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0),
+      c(0, 1, 0)
+    )
+  )
+  target <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0.5),
+      c(0, 1, 0.25)
+    )
+  )
+
+  scene <- babylon(data = list(morph_target3d(reference, target, influence = 0)))
+  calls <- list()
+  snapshot_stub <- function(filename, widget, vwidth, vheight, delay, ...) {
+    calls[[length(calls) + 1L]] <<- list(
+      filename = filename,
+      view = widget$x$scene$view,
+      influence = widget$x$objects[[1]]$morph_target$influence
+    )
+    writeLines("", filename)
+    filename
+  }
+
+  frames <- render_frames3d(
+    scene,
+    dir = tempfile("babylon_frames_"),
+    views = orbit_path3d(n = 3, zoom = 1.1),
+    morph = morph_path3d(n = 3, from = 0, to = 0.5),
+    snapshot_fun = snapshot_stub
+  )
+
+  testthat::expect_length(frames, 3L)
+  testthat::expect_equal(length(calls), 3L)
+  testthat::expect_equal(calls[[1]]$influence, 0)
+  testthat::expect_equal(calls[[3]]$influence, 0.5)
+  testthat::expect_equal(calls[[1]]$view$zoom, 1.1)
+})
+
+testthat::test_that("render_frames3d can derive heatmap frames from morph targets", {
+  reference <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0),
+      c(0, 1, 0)
+    )
+  )
+  target <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0.5),
+      c(0, 1, 0.25)
+    )
+  )
+
+  scene <- babylon(data = list(morph_target3d(reference, target, influence = 0)))
+  calls <- list()
+  snapshot_stub <- function(filename, widget, vwidth, vheight, delay, ...) {
+    calls[[length(calls) + 1L]] <<- list(
+      filename = filename,
+      view = widget$x$scene$view,
+      comparison = widget$x$objects[[1]]$vertex_attributes$comparisonPosition$data,
+      legend = widget$x$objects[[1]]$heatmap_legend
+    )
+    writeLines("", filename)
+    filename
+  }
+
+  frames <- render_frames3d(
+    scene,
+    dir = tempfile("babylon_heatmap_frames_"),
+    views = orbit_path3d(n = 2, zoom = 1.2),
+    morph = morph_path3d(n = 2, from = 0, to = 1),
+    heatmap = TRUE,
+    heatmap_args = list(alpha = 0.4),
+    snapshot_fun = snapshot_stub
+  )
+
+  testthat::expect_length(frames, 2L)
+  testthat::expect_equal(length(calls), 2L)
+  testthat::expect_equal(calls[[1]]$comparison, mesh3d_vertices(reference))
+  testthat::expect_equal(calls[[2]]$comparison, mesh3d_vertices(target))
+  testthat::expect_equal(calls[[1]]$view$zoom, 1.2)
+  testthat::expect_identical(calls[[1]]$legend$title, "Difference Scale")
+})
+
+testthat::test_that("render_frames3d heatmap mode allows axes to be disabled", {
+  reference <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0),
+      c(0, 1, 0)
+    )
+  )
+  target <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0.5),
+      c(0, 1, 0.25)
+    )
+  )
+
+  scene <- babylon(data = list(morph_target3d(reference, target, influence = 0)))
+  calls <- list()
+  snapshot_stub <- function(filename, widget, vwidth, vheight, delay, ...) {
+    calls[[length(calls) + 1L]] <<- list(
+      axes = widget$x$scene$axes
+    )
+    writeLines("", filename)
+    filename
+  }
+
+  render_frames3d(
+    scene,
+    dir = tempfile("babylon_heatmap_noaxes_"),
+    views = orbit_path3d(n = 1, zoom = 1.1),
+    morph = morph_path3d(n = 1, from = 0, to = 1),
+    heatmap = TRUE,
+    heatmap_args = list(axes = FALSE),
+    snapshot_fun = snapshot_stub
+  )
+
+  testthat::expect_length(calls, 1L)
+  testthat::expect_identical(calls[[1]]$axes, FALSE)
+})
+
+testthat::test_that("record_scene3d builds ffmpeg and magick command arguments", {
+  ffmpeg_args <- build_ffmpeg_video_args("frame_%05d.png", "movie.mp4", fps = 24)
+  magick_args <- build_magick_gif_args(c("f1.png", "f2.png"), "movie.gif", fps = 20, loop = 0)
+
+  testthat::expect_true(all(c("-framerate", "24", "movie.mp4") %in% ffmpeg_args))
+  testthat::expect_true(all(c("-delay", "5", "-loop", "0", "movie.gif") %in% magick_args))
+})
+
+testthat::test_that("record_scene3d forwards heatmap arguments to the renderer", {
+  render_calls <- list()
+  render_stub <- function(..., heatmap = FALSE, heatmap_args = NULL) {
+    render_calls[[length(render_calls) + 1L]] <<- list(
+      heatmap = heatmap,
+      heatmap_args = heatmap_args
+    )
+    tmp_dir <- list(...)$dir
+    frames <- file.path(tmp_dir, sprintf("frame_%05d.png", 1:2))
+    for (frame in frames) {
+      writeLines("", frame)
+    }
+    frames
+  }
+  runner_stub <- function(command, args) 0L
+
+  output <- tempfile(fileext = ".mp4")
+  record_scene3d(
+    babylon(data = list(list(type = "sphere", diameter = 1))),
+    file = output,
+    views = orbit_path3d(n = 2),
+    heatmap = TRUE,
+    heatmap_args = list(alpha = 0.5, axes = FALSE),
+    render_fun = render_stub,
+    system_runner = runner_stub
+  )
+
+  testthat::expect_length(render_calls, 1L)
+  testthat::expect_true(isTRUE(render_calls[[1]]$heatmap))
+  testthat::expect_equal(render_calls[[1]]$heatmap_args$alpha, 0.5)
+  testthat::expect_identical(render_calls[[1]]$heatmap_args$axes, FALSE)
 })
 
 testthat::test_that("scene object normalization applies compatibility layer", {
@@ -329,11 +619,11 @@ testthat::test_that("apply_scene_state updates meshes, lights, and view state", 
 
   widget <- babylon(
     data = list(mesh, key),
-    scene = list(view = serialize_par3d(list(zoom = 1, userMatrix = diag(4))))
+    scene = list(view = serialize_par3d(list(zoom = 1, userMatrix = diag(4), bg = "#FAFAFA")))
   )
 
   state <- list(
-    view = list(zoom = 1.5, userMatrix = diag(4)),
+    view = list(zoom = 1.5, userMatrix = diag(4), bg = "#445566"),
     objects = list(
       list(index = 1, name = "specimen", position = c(1, 2, 3), rotation = c(0.1, 0.2, 0.3), scaling = c(2, 2, 2)),
       list(index = 2, name = "key", direction = c(1, -1, 0), intensity = 0.9)
@@ -348,18 +638,9 @@ testthat::test_that("apply_scene_state updates meshes, lights, and view state", 
   testthat::expect_equal(updated$x$objects[[2]]$direction, c(1, -1, 0))
   testthat::expect_equal(updated$x$objects[[2]]$intensity, 0.9)
   testthat::expect_equal(updated$x$scene$view$zoom, 1.5)
+  testthat::expect_identical(updated$x$scene$view$bg, "#445566")
   testthat::expect_equal(last_scene_state()$objects[[1]]$position, c(1, 2, 3))
 })
-
-make_test_mesh3d <- function(vertices, faces = matrix(c(1, 2, 3), nrow = 3)) {
-  structure(
-    list(
-      vb = rbind(t(vertices), rep(1, nrow(vertices))),
-      it = faces
-    ),
-    class = "mesh3d"
-  )
-}
 
 testthat::test_that("segments3d supports per-segment colors", {
   pts <- rbind(

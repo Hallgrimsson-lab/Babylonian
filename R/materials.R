@@ -1,5 +1,5 @@
 modify_babylon_mesh <- function(x, args) {
-  allowed <- c("color", "alpha", "specularity", "position", "rotation", "scaling", "name", "wireframe", "material", "vertex_attributes")
+  allowed <- c("color", "alpha", "specularity", "position", "rotation", "scaling", "name", "wireframe", "material", "vertex_attributes", "morph_target")
 
   for (nm in intersect(names(args), allowed)) {
     value <- args[[nm]]
@@ -13,6 +13,8 @@ modify_babylon_mesh <- function(x, args) {
       value <- normalize_material3d(value)
     } else if (nm == "vertex_attributes") {
       value <- normalize_vertex_attributes(value)
+    } else if (nm == "morph_target") {
+      value <- normalize_morph_target_spec(value, base_vertices = x$vertices, base_indices = x$indices)
     }
     x[[nm]] <- value
   }

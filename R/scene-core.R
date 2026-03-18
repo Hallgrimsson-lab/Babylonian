@@ -82,6 +82,9 @@ normalize_scene_object <- function(x) {
     if (!is.null(x$vertex_attributes)) {
       x$vertex_attributes <- normalize_vertex_attributes(x$vertex_attributes)
     }
+    if (!is.null(x$morph_target)) {
+      x$morph_target <- normalize_morph_target_spec(x$morph_target, base_vertices = x$vertices, base_indices = x$indices)
+    }
     if (!is.null(x$color)) {
       if (identical(x$type, "segments3d") && length(x$color) > 1L) {
         x$color <- normalize_segment_colors(x$color, nrow(x$points) / 2L)
@@ -173,18 +176,20 @@ append_scene_objects <- function(objects, add = TRUE, axes = TRUE, nticks = 5) {
 #' Get or set Babylonian view parameters
 #'
 #' This stores lightweight `par3d()`-style view settings that new Babylonian
-#' scenes will use, including `zoom` and `userMatrix`.
+#' scenes will use, including `zoom`, `userMatrix`, and background color.
 #'
 #' @param zoom Optional zoom multiplier.
 #' @param userMatrix Optional 4 x 4 user matrix used to rotate the scene pose.
+#' @param bg Optional background color for the scene canvas.
 #' @param reset Whether to restore the default view state.
 #'
 #' @export
-par3d <- function(zoom = NULL, userMatrix = NULL, reset = FALSE) {
+par3d <- function(zoom = NULL, userMatrix = NULL, bg = NULL, reset = FALSE) {
   if (isTRUE(reset)) {
     .babylon_state$par3d <- list(
       zoom = 0.05,
-      userMatrix = diag(4)
+      userMatrix = diag(4),
+      bg = "#FAFAFA"
     )
   }
 
@@ -196,7 +201,30 @@ par3d <- function(zoom = NULL, userMatrix = NULL, reset = FALSE) {
     .babylon_state$par3d$userMatrix <- normalize_user_matrix(userMatrix)
   }
 
+  if (!is.null(bg)) {
+    .babylon_state$par3d$bg <- normalize_babylon_color(bg)
+  }
+
+  .babylon_state$last_scene_par3d <- .babylon_state$par3d
   .babylon_state$par3d
+}
+
+#' Get or set the persistent Babylonian scene background color
+#'
+#' This is a small convenience wrapper around [par3d()] for the scene canvas
+#' background. The color persists across new scenes the same way `zoom` and
+#' `userMatrix` do.
+#'
+#' @param color Optional background color. When omitted, the current background
+#'   color is returned.
+#'
+#' @export
+bg3d <- function(color = NULL) {
+  if (is.null(color)) {
+    return(par3d()$bg)
+  }
+
+  par3d(bg = color)$bg
 }
 
 #' Get the last Babylonian scene view state
@@ -229,9 +257,17 @@ normalize_view <- function(x) {
     user_matrix <- .babylon_state$par3d$userMatrix
   }
 
+  bg <- x$bg
+  if (is.null(bg)) {
+    bg <- .babylon_state$par3d$bg
+  } else {
+    bg <- normalize_babylon_color(bg)
+  }
+
   serialize_par3d(list(
     zoom = zoom,
-    userMatrix = user_matrix
+    userMatrix = user_matrix,
+    bg = bg
   ))
 }
 
@@ -239,7 +275,8 @@ serialize_par3d <- function(x) {
   mat <- normalize_user_matrix(x$userMatrix)
   list(
     zoom = as.numeric(x$zoom[[1]]),
-    userMatrix = unname(split(mat, row(mat)))
+    userMatrix = unname(split(mat, row(mat))),
+    bg = normalize_babylon_color(x$bg %||% .babylon_state$par3d$bg)
   )
 }
 
@@ -250,7 +287,8 @@ deserialize_par3d <- function(x) {
 
   list(
     zoom = as.numeric(x$zoom[[1]]),
-    userMatrix = normalize_user_matrix(x$userMatrix)
+    userMatrix = normalize_user_matrix(x$userMatrix),
+    bg = normalize_babylon_color(x$bg %||% .babylon_state$par3d$bg)
   )
 }
 

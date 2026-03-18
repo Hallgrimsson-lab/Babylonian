@@ -200,13 +200,54 @@ pbrmesh <- as_babylon_mesh(
 
 babylon(data = list(pbrmesh))
 
+# movies + animation
+scene <- babylon(
+  data = list(
+    morph_target3d(mesh, mesh2, influence = 0, color = "gray75")
+  )
+)
+
+state <- edit_scene3d(scene)
+scene_prep <- apply_scene_state(scene, state = state)
+
+nframes = 10
+record_scene3d(
+  scene_prep,
+  file = "turntable.mp4",
+  views = orbit_path3d(n = nframes, axis = "y", zoom = 1.1),
+  morph = morph_path3d(n = nframes, from = 0, to = 1)
+)
+
+scene <- babylon(
+  data = list(
+    morph_target3d(mesh, mesh2, influence = 0, color = "gray75")
+  )
+)
+
+state <- edit_scene3d(scene)
+scene_prep <- apply_scene_state(scene, state = state)
+bg3d("black")
+record_scene3d(
+  scene_prep,
+  file = "heatmap.mp4",
+  morph = morph_path3d(n = 30, from = 0, to = 1),
+  heatmap = TRUE,
+  heatmap_args = list(
+    alpha = 0,
+    displace = TRUE, 
+    axes = F
+  )
+)
+
+
 # - digitize parity
-# - shader support??
 # - lights: just kinda ok
 # - multiwindow: sync bugged
-# - movies
 # - gizmo support on lights and meshes: hard to use
 
 #done
 # - heatmap/meshdist/wireframe
+# - shader support??
+# - movies
+
 

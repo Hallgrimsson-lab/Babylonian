@@ -4,16 +4,18 @@
 \alias{par3d}
 \title{Get or set Babylonian view parameters}
 \usage{
-par3d(zoom = NULL, userMatrix = NULL, reset = FALSE)
+par3d(zoom = NULL, userMatrix = NULL, bg = NULL, reset = FALSE)
 }
 \arguments{
 \item{zoom}{Optional zoom multiplier.}
 
 \item{userMatrix}{Optional 4 x 4 user matrix used to rotate the scene pose.}
 
+\item{bg}{Optional background color for the scene canvas.}
+
 \item{reset}{Whether to restore the default view state.}
 }
 \description{
 This stores lightweight `par3d()`-style view settings that new Babylonian
-scenes will use, including `zoom` and `userMatrix`.
+scenes will use, including `zoom`, `userMatrix`, and background color.
 }

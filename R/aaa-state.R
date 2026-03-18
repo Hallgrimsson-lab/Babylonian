@@ -3,7 +3,8 @@
 .babylon_state$current_scene <- NULL
 .babylon_state$par3d <- list(
   zoom = 0.05,
-  userMatrix = diag(4)
+  userMatrix = diag(4),
+  bg = "#FAFAFA"
 )
 .babylon_state$last_scene_par3d <- .babylon_state$par3d
 .babylon_state$last_live_par3d <- NULL

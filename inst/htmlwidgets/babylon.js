@@ -16,9 +16,11 @@ HTMLWidgets.widget({
     // Create a Babylon.js engine
     var engine = new BABYLON.Engine(canvas, true);
 
+    var defaultSceneBackground = new BABYLON.Color4(0.98, 0.98, 0.98, 1);
+
     // Create a scene
     var scene = new BABYLON.Scene(engine);
-    scene.clearColor = new BABYLON.Color4(0.98, 0.98, 0.98, 1);
+    scene.clearColor = defaultSceneBackground.clone();
 
     // Create a camera
     var camera = new BABYLON.ArcRotateCamera(
@@ -100,6 +102,9 @@ HTMLWidgets.widget({
     var currentSyncConfig = null;
     var applyingSyncedView = false;
     var pendingSyncedView = null;
+    var pendingSyncedCameraState = null;
+    var lastAppliedSyncSignature = null;
+    var lastBroadcastSyncSignature = null;
 
     function clamp01(x) {
       if (!isFinite(x)) {
@@ -199,26 +204,22 @@ HTMLWidgets.widget({
       };
 
       hub.groups[syncConfig.group].members[widgetInstanceId] = {
-        applyView: function(view) {
-          if (!view) {
+        applyCameraState: function(state) {
+          if (!state) {
             return;
           }
 
-          if (!currentSceneOptions) {
-            currentSceneOptions = {};
+          var normalizedState = normalizeCameraSyncState(state);
+          if (!normalizedState) {
+            return;
           }
-          currentSceneOptions.view = view;
 
           if (!currentSceneBounds || !baseCameraState) {
-            pendingSyncedView = view;
+            pendingSyncedCameraState = normalizedState;
             return;
           }
 
-          applyingSyncedView = true;
-          applyViewOptions(currentSceneBounds, currentSceneOptions);
-          window.setTimeout(function() {
-            applyingSyncedView = false;
-          }, 0);
+          applySyncedCameraState(normalizedState);
         }
       };
     }
@@ -288,6 +289,28 @@ HTMLWidgets.widget({
       return new BABYLON.Color4(color3.r, color3.g, color3.b, a);
     }
 
+    function applySceneBackground(sceneOptions) {
+      var view = sceneOptions && sceneOptions.view ? sceneOptions.view : null;
+      var fallback = defaultSceneBackground.clone();
+      scene.clearColor = coerceColor4(view && view.bg ? view.bg : null, 1, fallback);
+    }
+
+    function mergeViewOptions(nextView) {
+      var merged = {};
+      var currentView = currentSceneOptions && currentSceneOptions.view ? currentSceneOptions.view : null;
+      if (currentView) {
+        Object.keys(currentView).forEach(function(key) {
+          merged[key] = currentView[key];
+        });
+      }
+      if (nextView) {
+        Object.keys(nextView).forEach(function(key) {
+          merged[key] = nextView[key];
+        });
+      }
+      return merged;
+    }
+
     function coerceVector3(value, fallback) {
       if (value instanceof BABYLON.Vector3) {
         return value.clone();
@@ -349,6 +372,23 @@ HTMLWidgets.widget({
 
         mesh.setVerticesBuffer(new BABYLON.VertexBuffer(engine, data, attributeName, false, false, size));
       });
+    }
+
+    function applyMorphTarget(mesh, primitive) {
+      var spec = primitive.morph_target || primitive.morphTarget;
+      if (!spec || !Array.isArray(spec.vertices) || !spec.vertices.length) {
+        return;
+      }
+
+      var manager = new BABYLON.MorphTargetManager();
+      var target = new BABYLON.MorphTarget(
+        spec.name || (mesh.name + "-morph"),
+        spec.influence === undefined ? 0 : Number(spec.influence),
+        scene
+      );
+      target.setPositions(spec.vertices);
+      manager.addTarget(target);
+      mesh.morphTargetManager = manager;
     }
 
     function legacyMaterialSpec(primitive) {
@@ -1049,7 +1089,103 @@ HTMLWidgets.widget({
       };
     }
 
+    function normalizeCameraSyncState(state) {
+      if (!state) {
+        return null;
+      }
+
+      var alpha = Number(state.alpha);
+      var beta = Number(state.beta);
+      var radius = Number(state.radius);
+      var target = state.target;
+      if (!isFinite(alpha) || !isFinite(beta) || !isFinite(radius) || radius <= 0 || !Array.isArray(target) || target.length < 3) {
+        return null;
+      }
+
+      return {
+        alpha: alpha,
+        beta: beta,
+        radius: radius,
+        target: [
+          Number(target[0]) || 0,
+          Number(target[1]) || 0,
+          Number(target[2]) || 0
+        ]
+      };
+    }
+
+    function currentCameraSyncState() {
+      if (!camera) {
+        return null;
+      }
+
+      var target = camera.getTarget ? camera.getTarget() : camera.target;
+      if (!target) {
+        return null;
+      }
+
+      return normalizeCameraSyncState({
+        alpha: camera.alpha,
+        beta: camera.beta,
+        radius: camera.radius,
+        target: [target.x, target.y, target.z]
+      });
+    }
+
+    function cameraSyncSignature(state) {
+      var normalizedState = normalizeCameraSyncState(state);
+      if (!normalizedState) {
+        return null;
+      }
+
+      return [
+        normalizedState.alpha.toFixed(6),
+        normalizedState.beta.toFixed(6),
+        normalizedState.radius.toFixed(6),
+        normalizedState.target[0].toFixed(6),
+        normalizedState.target[1].toFixed(6),
+        normalizedState.target[2].toFixed(6)
+      ].join("|");
+    }
+
+    function applySyncedCameraState(state) {
+      var normalizedState = normalizeCameraSyncState(state);
+      if (!normalizedState) {
+        return;
+      }
+
+      var signature = cameraSyncSignature(normalizedState);
+      if (signature && signature === cameraSyncSignature(currentCameraSyncState())) {
+        return;
+      }
+
+      applyingSyncedView = true;
+      lastAppliedSyncSignature = signature;
+      if (camera.inertialAlphaOffset !== undefined) {
+        camera.inertialAlphaOffset = 0;
+      }
+      if (camera.inertialBetaOffset !== undefined) {
+        camera.inertialBetaOffset = 0;
+      }
+      if (camera.inertialRadiusOffset !== undefined) {
+        camera.inertialRadiusOffset = 0;
+      }
+      camera.setTarget(new BABYLON.Vector3(
+        normalizedState.target[0],
+        normalizedState.target[1],
+        normalizedState.target[2]
+      ));
+      camera.alpha = normalizedState.alpha;
+      camera.beta = normalizedState.beta;
+      camera.radius = normalizedState.radius;
+      window.setTimeout(function() {
+        applyingSyncedView = false;
+      }, 0);
+    }
+
     function applyViewOptions(bounds, sceneOptions) {
+      applySceneBackground(sceneOptions);
+
       if (!bounds || !sceneOptions || !sceneOptions.view || !baseCameraState) {
         return;
       }
@@ -1099,8 +1235,15 @@ HTMLWidgets.widget({
         return;
       }
 
-      var payload = currentPar3dState();
+      var payload = currentCameraSyncState();
       if (!payload) {
+        return;
+      }
+      var signature = cameraSyncSignature(payload);
+      if (signature && signature === lastAppliedSyncSignature) {
+        return;
+      }
+      if (signature && signature === lastBroadcastSyncSignature) {
         return;
       }
 
@@ -1115,10 +1258,11 @@ HTMLWidgets.widget({
           return;
         }
         var member = group.members[memberId];
-        if (member && typeof member.applyView === "function") {
-          member.applyView(payload);
+        if (member && typeof member.applyCameraState === "function") {
+          member.applyCameraState(payload);
         }
       });
+      lastBroadcastSyncSignature = signature;
     }
 
     function updatePosePanel(state, payload) {
@@ -1655,13 +1799,18 @@ HTMLWidgets.widget({
         if (!currentSceneOptions) {
           currentSceneOptions = {};
         }
-        currentSceneOptions.view = pendingSyncedView;
+        currentSceneOptions.view = mergeViewOptions(pendingSyncedView);
         applyingSyncedView = true;
         applyViewOptions(currentSceneBounds, currentSceneOptions);
         pendingSyncedView = null;
         window.setTimeout(function() {
           applyingSyncedView = false;
         }, 0);
+      }
+
+      if (pendingSyncedCameraState) {
+        applySyncedCameraState(pendingSyncedCameraState);
+        pendingSyncedCameraState = null;
       }
     }
 
@@ -2005,6 +2154,7 @@ HTMLWidgets.widget({
         var objects = payload.objects || [];
         var interaction = payload.interaction || null;
         currentSceneOptions = payload.scene || null;
+        applySceneBackground(currentSceneOptions);
         var heatmapLegendPrimitive = null;
         var hasCustomLights = false;
         var editableTargets = [];
@@ -2091,6 +2241,7 @@ HTMLWidgets.widget({
             vertexData.applyToMesh(babylonMesh);
 
             applyCustomVertexAttributes(babylonMesh, primitive);
+            applyMorphTarget(babylonMesh, primitive);
             applyTransform(babylonMesh, primitive);
             applyMaterial(babylonMesh, primitive);
             registerEditableTarget(editableTargets, primitive, i, babylonMesh, "mesh");

@@ -222,6 +222,36 @@ To plot only the corresponding heatmap scale as a 2D graphic, use
 heatmap_scale(reference_mesh, target_mesh)
 ```
 
+For animation, you can generate camera paths, animate morph-target influence,
+render high-resolution PNG frames, and then encode either a GIF or a video:
+
+```r
+scene <- babylon(
+  data = list(
+    morph_target3d(reference_mesh, target_mesh, influence = 0, color = "gray75")
+  )
+)
+
+record_scene3d(
+  scene,
+  file = "turntable.mp4",
+  views = orbit_path3d(n = 120, axis = "y", zoom = 1.1),
+  morph = morph_path3d(n = 120, from = 0, to = 1)
+)
+
+record_scene3d(
+  scene,
+  file = "heatmap-turntable.mp4",
+  views = orbit_path3d(n = 120, axis = "y", zoom = 1.1),
+  morph = morph_path3d(n = 120, from = 0, to = 1),
+  heatmap = TRUE,
+  heatmap_args = list(
+    alpha = 0.4,
+    displace = TRUE
+  )
+)
+```
+
 
 To save a static screenshot of the current scene, use `snapshot3d()` (or the
 `rgl`-style aliases `rgl.snapshot()` and `snapshot()`):
@@ -240,17 +270,21 @@ poses:
 pose <- par3d()
 pose$userMatrix
 pose$zoom
+pose$bg
 
 par3d(
   zoom = 1.4,
-  userMatrix = diag(4)
+  userMatrix = diag(4),
+  bg = "white"
 )
+
+bg3d("#f5f5f5")
 
 plot3d(your_morpho_mesh)
 ```
 
 That view state is applied to new scenes, so you can reuse the same
-`userMatrix` and `zoom` across multiple plots.
+`userMatrix`, `zoom`, and background color across multiple plots.
 
 You can also ask for the last Babylonian view state known to R:
 
@@ -262,7 +296,7 @@ To interactively create a reusable pose, open a dedicated pose gadget:
 
 ```r
 pose <- create_pose_3d(your_morpho_mesh)
-par3d(zoom = pose$zoom, userMatrix = pose$userMatrix)
+par3d(zoom = pose$zoom, userMatrix = pose$userMatrix, bg = pose$bg)
 ```
 
 ## Surface landmark digitizing

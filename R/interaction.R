@@ -199,6 +199,7 @@ apply_scene_state <- function(x = NULL, state = last_scene_state(), ...) {
   widget$x$scene <- normalize_scene(widget$x$scene)
   if (!is.null(state$view)) {
     widget$x$scene$view <- normalize_view(state$view)
+    .babylon_state$last_scene_par3d <- deserialize_par3d(widget$x$scene$view)
   }
 
   set_last_scene_state(state)
