@@ -161,6 +161,49 @@ HTMLWidgets.widget({
       return {};
     }
 
+    function resolveAttachmentHref(path) {
+      if (typeof path !== "string" || !path.length) {
+        return path;
+      }
+
+      if (/^(?:[a-z]+:)?\/\//i.test(path) || path.charAt(0) === "/") {
+        return path;
+      }
+
+      var links = document.querySelectorAll("link[rel='attachment']");
+      for (var i = 0; i < links.length; i += 1) {
+        var href = links[i].getAttribute("href");
+        if (!href) {
+          continue;
+        }
+        if (href === path || href.slice(-path.length) === path) {
+          return href;
+        }
+      }
+
+      return path;
+    }
+
+    function splitSceneLoaderUrl(path) {
+      if (typeof path !== "string" || !path.length) {
+        return {rootUrl: "", sceneFilename: path};
+      }
+
+      if (/^(?:data|blob):/i.test(path)) {
+        return {rootUrl: "", sceneFilename: path};
+      }
+
+      var lastSlash = path.lastIndexOf("/");
+      if (lastSlash < 0) {
+        return {rootUrl: "", sceneFilename: path};
+      }
+
+      return {
+        rootUrl: path.slice(0, lastSlash + 1),
+        sceneFilename: path.slice(lastSlash + 1)
+      };
+    }
+
     function getSyncHub() {
       var root = globalObject();
       if (!root.__babylonianSyncHub) {
@@ -571,8 +614,51 @@ HTMLWidgets.widget({
           return;
         }
 
-        material.setTexture(name, registerTexture(new BABYLON.Texture(rawValue, scene)));
+        material.setTexture(name, registerTexture(new BABYLON.Texture(resolveAttachmentHref(rawValue), scene)));
       });
+    }
+
+    function createTextureFromSpec(spec, fallbackColorspace) {
+      if (!spec) {
+        return null;
+      }
+
+      var rawSpec = spec && typeof spec === "object" && !Array.isArray(spec) && Object.prototype.hasOwnProperty.call(spec, "value")
+        ? spec.value
+        : spec;
+      if (typeof rawSpec === "string") {
+        rawSpec = {file: rawSpec};
+      }
+      if (!rawSpec || typeof rawSpec !== "object" || Array.isArray(rawSpec) || !rawSpec.file) {
+        return null;
+      }
+
+      var texture = registerTexture(new BABYLON.Texture(resolveAttachmentHref(rawSpec.file), scene, false, !!rawSpec.invert_y));
+      var colorspace = rawSpec.colorspace || fallbackColorspace || "auto";
+      if (colorspace === "srgb") {
+        texture.gammaSpace = true;
+      } else if (colorspace === "linear") {
+        texture.gammaSpace = false;
+      }
+      if (rawSpec.level !== undefined) {
+        texture.level = Number(rawSpec.level);
+      }
+      if (rawSpec.has_alpha !== undefined) {
+        texture.hasAlpha = !!rawSpec.has_alpha;
+      }
+      if (rawSpec.u_scale !== undefined) {
+        texture.uScale = Number(rawSpec.u_scale);
+      }
+      if (rawSpec.v_scale !== undefined) {
+        texture.vScale = Number(rawSpec.v_scale);
+      }
+      if (rawSpec.u_offset !== undefined) {
+        texture.uOffset = Number(rawSpec.u_offset);
+      }
+      if (rawSpec.v_offset !== undefined) {
+        texture.vOffset = Number(rawSpec.v_offset);
+      }
+      return texture;
     }
 
     function createMaterialFromSpec(mesh, primitive, spec) {
@@ -588,6 +674,26 @@ HTMLWidgets.widget({
         material.albedoColor = coerceColor3(spec.base_color || spec.albedo || "#FFFFFF", new BABYLON.Color3(1, 1, 1));
         material.metallic = spec.metallic === undefined ? 0 : Number(spec.metallic);
         material.roughness = spec.roughness === undefined ? 1 : Number(spec.roughness);
+        if (spec.base_color_texture) {
+          material.albedoTexture = createTextureFromSpec(spec.base_color_texture, "srgb");
+        }
+        if (spec.metallic_roughness_texture) {
+          material.metallicTexture = createTextureFromSpec(spec.metallic_roughness_texture, "linear");
+          if (material.metallicTexture) {
+            material.useMetallnessFromMetallicTextureBlue = true;
+            material.useRoughnessFromMetallicTextureGreen = true;
+            material.useAmbientOcclusionFromMetallicTextureRed = true;
+          }
+        }
+        if (spec.normal_texture) {
+          material.bumpTexture = createTextureFromSpec(spec.normal_texture, "linear");
+        }
+        if (spec.occlusion_texture) {
+          material.ambientTexture = createTextureFromSpec(spec.occlusion_texture, "linear");
+        }
+        if (spec.emissive_texture) {
+          material.emissiveTexture = createTextureFromSpec(spec.emissive_texture, "srgb");
+        }
         if (spec.emissive !== undefined) {
           material.emissiveColor = coerceColor3(spec.emissive, new BABYLON.Color3(0, 0, 0));
         }
@@ -682,6 +788,185 @@ HTMLWidgets.widget({
       if (material) {
         mesh.material = material;
       }
+    }
+
+    function importedMeshMatchesTarget(mesh, target, meshIndex) {
+      if (target === undefined || target === null) {
+        return true;
+      }
+
+      if (typeof target === "number") {
+        return target === meshIndex || target === (meshIndex + 1);
+      }
+
+      if (Array.isArray(target)) {
+        return target.some(function(entry) {
+          if (typeof entry === "number") {
+            return entry === meshIndex || entry === (meshIndex + 1);
+          }
+          if (typeof entry === "string") {
+            return entry === mesh.name || (mesh.material && entry === mesh.material.name);
+          }
+          return false;
+        });
+      }
+
+      if (typeof target === "string") {
+        return target === mesh.name || (mesh.material && target === mesh.material.name);
+      }
+
+      return false;
+    }
+
+    function importedMeshMatchesOverride(mesh, override, meshIndex) {
+      if (!override) {
+        return true;
+      }
+      return importedMeshMatchesTarget(mesh, override.target, meshIndex);
+    }
+
+    function applyImportedGeometryOverride(mesh, geometry) {
+      if (!mesh || !geometry) {
+        return;
+      }
+
+      if (Array.isArray(geometry.indices) && geometry.indices.length) {
+        mesh.setIndices(geometry.indices);
+      }
+      if (Array.isArray(geometry.vertices) && geometry.vertices.length) {
+        mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, geometry.vertices, true);
+      }
+      if (Array.isArray(geometry.normals) && geometry.normals.length) {
+        mesh.setVerticesData(BABYLON.VertexBuffer.NormalKind, geometry.normals, true);
+      }
+      if (Array.isArray(geometry.uvs) && geometry.uvs.length) {
+        mesh.setVerticesData(BABYLON.VertexBuffer.UVKind, geometry.uvs, true);
+      }
+      if ((!geometry.normals || !geometry.normals.length) && mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind) && mesh.getIndices()) {
+        var computedNormals = [];
+        BABYLON.VertexData.ComputeNormals(
+          mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind),
+          mesh.getIndices(),
+          computedNormals
+        );
+        mesh.setVerticesData(BABYLON.VertexBuffer.NormalKind, computedNormals, true);
+      }
+      if (mesh.refreshBoundingInfo) {
+        mesh.refreshBoundingInfo(true);
+      }
+      mesh.computeWorldMatrix(true);
+    }
+
+    function applyImportedGeometryOverrides(meshes, primitive) {
+      if (!primitive.geometry_overrides || !primitive.geometry_overrides.length) {
+        return;
+      }
+
+      primitive.geometry_overrides.forEach(function(override) {
+        meshes.forEach(function(mesh, meshIndex) {
+          if (!importedMeshMatchesTarget(mesh, override.target, meshIndex)) {
+            return;
+          }
+          applyImportedGeometryOverride(mesh, override.geometry);
+        });
+      });
+    }
+
+    function applyImportedMaterialOverrides(meshes, primitive) {
+      if (primitive.material) {
+        meshes.forEach(function(mesh) {
+          applyMaterial(mesh, {material: primitive.material});
+        });
+      }
+
+      if (!primitive.material_overrides || !primitive.material_overrides.length) {
+        return;
+      }
+
+      primitive.material_overrides.forEach(function(override) {
+        meshes.forEach(function(mesh, meshIndex) {
+          if (!importedMeshMatchesOverride(mesh, override, meshIndex)) {
+            return;
+          }
+          applyMaterial(mesh, {material: override.material});
+        });
+      });
+    }
+
+    function registerImportedAssetTarget(editableTargets, primitive, rootNode, importedMeshes) {
+      if (!rootNode) {
+        return;
+      }
+
+      registerEditableTarget(editableTargets, primitive, editableTargets.length, rootNode, "mesh");
+
+      if (!importedMeshes || !importedMeshes.length) {
+        return;
+      }
+
+      importedMeshes.forEach(function(mesh, meshIndex) {
+        registerEditableTarget(editableTargets, {
+          name: mesh.name || (primitive.name || "asset") + "-mesh-" + meshIndex
+        }, meshIndex, mesh, "mesh");
+      });
+    }
+
+    function loadImportedAsset(primitive, name, interaction, editableTargets, onLoaded, onError) {
+      var rootName = (primitive.name || name || "asset") + "-root";
+      var assetUrl = resolveAttachmentHref(primitive.file);
+      var loaderSource = splitSceneLoaderUrl(assetUrl);
+      var applyLoadedAsset = function(allMeshes, rootNodes, rootTransformNode) {
+        var importedMeshes = allMeshes.filter(function(mesh) {
+          return mesh && mesh.getTotalVertices && mesh.getTotalVertices() > 0;
+        });
+
+        applyImportedGeometryOverrides(importedMeshes, primitive);
+        applyImportedMaterialOverrides(importedMeshes, primitive);
+        if (rootTransformNode) {
+          applyTransform(rootTransformNode, primitive);
+          registerNode(rootTransformNode);
+        } else {
+          importedMeshes.forEach(function(mesh) {
+            applyTransform(mesh, primitive);
+          });
+        }
+        registerImportedAssetTarget(editableTargets, primitive, rootTransformNode || importedMeshes[0], importedMeshes);
+        onLoaded(importedMeshes);
+      };
+
+      if (BABYLON.SceneLoader.LoadAssetContainer) {
+        BABYLON.SceneLoader.LoadAssetContainer(loaderSource.rootUrl, loaderSource.sceneFilename, scene, function(container) {
+          if (container.addAllToScene) {
+            container.addAllToScene();
+          }
+
+          (container.meshes || []).forEach(registerNode);
+          (container.transformNodes || []).forEach(registerNode);
+          (container.materials || []).forEach(registerMaterial);
+          (container.textures || []).forEach(registerTexture);
+
+          var rootTransformNode = registerNode(new BABYLON.TransformNode(rootName, scene));
+          var rootCandidates = []
+            .concat(container.meshes || [])
+            .concat(container.transformNodes || [])
+            .filter(function(node) {
+              return node && !node.parent && node !== rootTransformNode;
+            });
+          rootCandidates.forEach(function(node) {
+            node.parent = rootTransformNode;
+          });
+
+          applyLoadedAsset(container.meshes || [], rootCandidates, rootTransformNode);
+        }, null, function(sceneRef, message, exception) {
+          onError(sceneRef, message, exception);
+        });
+        return;
+      }
+
+      BABYLON.SceneLoader.ImportMesh("", loaderSource.rootUrl, loaderSource.sceneFilename, scene, function(newMeshes) {
+        newMeshes.forEach(registerNode);
+        applyLoadedAsset(newMeshes, newMeshes.filter(function(mesh) { return !mesh.parent; }), null);
+      }, null, onError);
     }
 
     function createHeatmapRampTexture(name, colorramp) {
@@ -2291,13 +2576,10 @@ HTMLWidgets.widget({
               createPlaneMesh(coeffs, primitive, name + "-plane-" + idx);
             });
             scheduleFrame();
-          } else if (primitive.type === "mesh") {
+          } else if (primitive.type === "mesh" || primitive.type === "asset3d") {
             pendingImports += 1;
-            BABYLON.SceneLoader.ImportMesh("", "", primitive.file, scene, function (newMeshes) {
-              newMeshes.forEach(function(mesh) {
-                registerNode(mesh);
-                applyTransform(mesh, primitive);
-                applyMaterial(mesh, primitive);
+            loadImportedAsset(primitive, name, interaction, editableTargets, function(importedMeshes) {
+              importedMeshes.forEach(function(mesh) {
                 if (!primaryMesh && mesh.getTotalVertices && mesh.getTotalVertices() > 0) {
                   primaryMesh = mesh;
                 }
@@ -2305,7 +2587,7 @@ HTMLWidgets.widget({
               pendingImports -= 1;
               initializeInteraction(interaction, primaryMesh, editableTargets);
               scheduleFrame();
-            }, null, function(scene, message, exception) {
+            }, function(scene, message, exception) {
               console.error("Error importing mesh:", message, exception);
               pendingImports -= 1;
               if (sceneUpdated && pendingImports === 0) {

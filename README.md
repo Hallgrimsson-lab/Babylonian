@@ -170,6 +170,112 @@ mesh <- as_babylon_mesh(
 babylon(data = list(mesh))
 ```
 
+Imported assets can also stay file-backed instead of being flattened into
+`mesh3d`. That is the preferred route for `glb`/`gltf` assets with authored
+PBR materials and textures:
+
+```r
+asset <- import_model3d("your-model.glb")
+babylon(data = list(asset))
+```
+
+To inspect a file-backed asset from R before rendering it, use
+`model_info3d()`. The packaged `BrainStem.gltf` in `inst/extdata` is included
+as a geometry-edit example:
+
+```r
+brainstem_info <- model_info3d(
+  system.file("extdata", "BrainStem.gltf", package = "Babylonian")
+)
+
+brainstem_info$meshes
+brainstem_info$materials
+brainstem_info$buffers
+```
+
+To load and plot the packaged `BrainStem.gltf`:
+
+```r
+brainstem <- import_model3d(
+  system.file("extdata", "BrainStem.gltf", package = "Babylonian")
+)
+
+plot3d(brainstem)
+```
+
+If you import geometry such as an `obj` and want to add your own textures from
+R, combine `import_model3d()`, `texture3d()`, and `pbr_material3d()`:
+
+```r
+statue <- import_model3d("statue.obj")
+
+statue <- set_material3d(
+  statue,
+  material = pbr_material3d(
+    base_color_texture = texture3d("albedo.png", colorspace = "srgb"),
+    normal_texture = texture3d("normal.png", colorspace = "linear"),
+    metallic_roughness_texture = texture3d("orm.png", colorspace = "linear"),
+    metallic = 0.1,
+    roughness = 0.9
+  )
+)
+
+babylon(data = list(statue))
+```
+
+To load and plot the packaged `Bee.glb`:
+
+```r
+bee <- import_model3d(
+  system.file("extdata", "Bee.glb", package = "Babylonian")
+)
+
+plot3d(bee)
+```
+
+If you want to edit imported mesh geometry directly in R, extract it, modify
+the vertices, and attach the edited geometry back onto the imported asset. This
+example loads the packaged brainstem, plots it, manipulates the geometry, and
+plots the edited version again:
+
+```r
+brainstem <- import_model3d(
+  system.file("extdata", "BrainStem.gltf", package = "Babylonian")
+)
+
+plot3d(brainstem)
+
+brainstem_geo <- extract_geometry3d(brainstem, target = "Figure_2_geometry")
+brainstem_geo <- scale_geometry3d(brainstem_geo, 1.05)
+brainstem_geo <- translate_geometry3d(brainstem_geo, c(0, 5, 0))
+
+brainstem_edited <- replace_geometry3d(
+  brainstem,
+  brainstem_geo,
+  target = "Figure_2_geometry"
+)
+
+plot3d(brainstem_edited)
+```
+
+`texture3d()` can also start from an in-memory image object instead of a file
+path, which makes it easier to preprocess textures in R before sending them to
+Babylon:
+
+```r
+img <- array(0, dim = c(64, 64, 4))
+img[, , 1] <- 1
+img[, , 4] <- 1
+
+tex <- texture3d(img, colorspace = "srgb")
+
+mat <- pbr_material3d(
+  base_color_texture = tex,
+  metallic = 0.1,
+  roughness = 0.9
+)
+```
+
 To load a node material export from `inst/extdata`, use:
 
 ```r

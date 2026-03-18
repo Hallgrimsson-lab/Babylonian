@@ -239,15 +239,34 @@ record_scene3d(
   )
 )
 
+# gltf
+brainstem_info <- model_info3d(
+  system.file("extdata", "BrainStem.gltf", package = "Babylonian")
+)
+
+brainstem_info$meshes
+brainstem_info$materials
+brainstem_info$buffers
+
+brainstem <- import_model3d(
+  system.file("extdata", "BrainStem.gltf", package = "Babylonian")
+)
+
+stempoints <- extract_geometry3d(brainstem)
+plot3d(stempoints$vertices)
+create_pose_3d(brainstem)
+plot3d(brainstem)
+babylon(data = list(brainstem))
 
 # - digitize parity
 # - lights: just kinda ok
-# - multiwindow: sync bugged
 # - gizmo support on lights and meshes: hard to use
+# - camera focus sharpness and other postprocessing
 
 #done
 # - heatmap/meshdist/wireframe
 # - shader support??
 # - movies
+# - multiwindow
 
 

@@ -36,8 +36,9 @@ babylon <- function(
     .babylon_state$last_scene_par3d <- deserialize_par3d(scene$view)
   }
 
-  dependencies <- Filter(Negate(is.null), lapply(data, `[[`, "dep"))
-  data <- lapply(data, function(d) { d$dep <- NULL; d })
+  extracted <- extract_scene_dependencies(data)
+  data <- extracted$value
+  dependencies <- htmltools::resolveDependencies(extracted$dependencies)
 
   htmlwidgets::createWidget(
     name = "babylon",
@@ -52,6 +53,27 @@ babylon <- function(
     elementId = elementId,
     dependencies = dependencies
   )
+}
+
+extract_scene_dependencies <- function(x, dependencies = list()) {
+  if (!is.list(x)) {
+    return(list(value = x, dependencies = dependencies))
+  }
+
+  if (!is.null(x$dep)) {
+    dependencies[[length(dependencies) + 1L]] <- x$dep
+    x$dep <- NULL
+  }
+
+  if (length(x)) {
+    for (i in seq_along(x)) {
+      extracted <- extract_scene_dependencies(x[[i]], dependencies)
+      x[[i]] <- extracted$value
+      dependencies <- extracted$dependencies
+    }
+  }
+
+  list(value = x, dependencies = dependencies)
 }
 
 normalize_scene_object <- function(x) {
@@ -76,25 +98,41 @@ normalize_scene_object <- function(x) {
   }
 
   if (is.list(x)) {
-    if (!is.null(x$material)) {
-      x$material <- normalize_material3d(x$material)
+    if (!is.null(x[["material"]])) {
+      x[["material"]] <- normalize_material3d(x[["material"]])
     }
-    if (!is.null(x$vertex_attributes)) {
-      x$vertex_attributes <- normalize_vertex_attributes(x$vertex_attributes)
+    if (!is.null(x[["material_overrides"]])) {
+      x[["material_overrides"]] <- lapply(x[["material_overrides"]], function(override) {
+        list(
+          target = normalize_model_target(override$target),
+          material = normalize_material3d(override$material)
+        )
+      })
     }
-    if (!is.null(x$morph_target)) {
-      x$morph_target <- normalize_morph_target_spec(x$morph_target, base_vertices = x$vertices, base_indices = x$indices)
+    if (!is.null(x[["geometry_overrides"]])) {
+      x[["geometry_overrides"]] <- lapply(x[["geometry_overrides"]], function(override) {
+        list(
+          target = normalize_model_target(override$target),
+          geometry = serialize_geometry3d(override$geometry %||% override)
+        )
+      })
     }
-    if (!is.null(x$color)) {
+    if (!is.null(x[["vertex_attributes"]])) {
+      x[["vertex_attributes"]] <- normalize_vertex_attributes(x[["vertex_attributes"]])
+    }
+    if (!is.null(x[["morph_target"]])) {
+      x[["morph_target"]] <- normalize_morph_target_spec(x[["morph_target"]], base_vertices = x$vertices, base_indices = x$indices)
+    }
+    if (!is.null(x[["color"]])) {
       if (identical(x$type, "segments3d") && length(x$color) > 1L) {
         x$color <- normalize_segment_colors(x$color, nrow(x$points) / 2L)
       } else {
         x$color <- normalize_babylon_color(x$color)
       }
     }
-    if (is.null(x$specularity) && !identical(x$type, "segments3d")) {
+    if (is.null(x[["specularity"]]) && !identical(x$type, "segments3d") && !identical(x$type, "mesh") && !identical(x$type, "asset3d")) {
       x$specularity <- normalize_babylon_specularity("black")
-    } else if (!is.null(x$specularity)) {
+    } else if (!is.null(x[["specularity"]])) {
       x$specularity <- normalize_babylon_specularity(x$specularity)
     }
   }

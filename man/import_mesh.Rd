@@ -4,10 +4,12 @@
 \alias{import_mesh}
 \title{Import a 3D mesh}
 \usage{
-import_mesh(file)
+import_mesh(file, ...)
 }
 \arguments{
 \item{file}{The path to the mesh file.}
+
+\item{...}{Additional arguments forwarded to [import_model3d()].}
 }
 \description{
 This function imports a 3D mesh from a file.

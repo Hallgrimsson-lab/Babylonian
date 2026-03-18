@@ -68,6 +68,40 @@ plot3d.babylon_mesh <- function(x, add = FALSE, axes = TRUE, nticks = 5, specula
   append_current_scene(x, add = add, axes = axes, nticks = nticks)
 }
 
+modify_babylon_asset <- function(x, args) {
+  allowed <- c("position", "rotation", "scaling", "name", "material", "preserve_materials")
+
+  for (nm in intersect(names(args), allowed)) {
+    value <- args[[nm]]
+    if (nm == "material") {
+      value <- normalize_material3d(value)
+    } else if (nm == "preserve_materials") {
+      value <- isTRUE(value)
+    }
+    x[[nm]] <- value
+  }
+
+  structure(x, class = class(x))
+}
+
+#' Plot a Babylon imported asset using rgl-like conventions
+#'
+#' @param x A `babylon_asset` object created by [import_model3d()].
+#' @param add Whether to add the asset to an existing widget specification. If
+#'   `FALSE`, a new widget is returned.
+#' @param axes Whether to draw lightweight scene axes, ticks, labels, and a
+#'   bounding box.
+#' @param nticks Approximate number of tick marks per axis when `axes = TRUE`.
+#' @param ... Additional graphical parameters. Recognized values include
+#'   `position`, `rotation`, `scaling`, `name`, `material`, and
+#'   `preserve_materials`.
+#'
+#' @export
+plot3d.babylon_asset <- function(x, add = FALSE, axes = TRUE, nticks = 5, ...) {
+  x <- modify_babylon_asset(normalize_model3d_asset(x), list(...))
+  append_current_scene(x, add = add, axes = axes, nticks = nticks)
+}
+
 #' Plot a `mesh3d` object with BabylonJS
 #'
 #' @param x A `mesh3d` object, such as a mesh imported through Morpho.
@@ -88,6 +122,11 @@ plot3d.mesh3d <- function(x, add = FALSE, axes = TRUE, nticks = 5, ...) {
 #' @export
 plot.babylon_mesh <- function(x, add = FALSE, axes = TRUE, nticks = 5, ...) {
   plot3d.babylon_mesh(x, add = add, axes = axes, nticks = nticks, ...)
+}
+
+#' @export
+plot.babylon_asset <- function(x, add = FALSE, axes = TRUE, nticks = 5, ...) {
+  plot3d.babylon_asset(x, add = add, axes = axes, nticks = nticks, ...)
 }
 
 #' Convert a 3-column matrix into a Babylonian point-cloud specification

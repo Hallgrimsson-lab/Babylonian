@@ -133,6 +133,289 @@ testthat::test_that("meshes can carry advanced materials and custom vertex attri
   testthat::expect_equal(length(mesh$vertex_attributes$comparisonPosition$data), 9L)
 })
 
+testthat::test_that("texture3d descriptors can be embedded in PBR materials", {
+  tmp <- tempfile(fileext = ".png")
+  writeBin(as.raw(c(0x89, 0x50, 0x4E, 0x47)), tmp)
+
+  tex <- texture3d(tmp, colorspace = "srgb", invert_y = TRUE)
+  mat <- pbr_material3d(
+    base_color_texture = tex,
+    normal_texture = tex,
+    metallic = 0.2,
+    roughness = 0.7
+  )
+
+  testthat::expect_s3_class(tex, "babylon_texture")
+  testthat::expect_identical(mat$type, "pbr")
+  testthat::expect_identical(mat$base_color_texture$file, basename(tmp))
+  testthat::expect_identical(mat$normal_texture$invert_y, TRUE)
+})
+
+testthat::test_that("texture3d supports in-memory image arrays", {
+  img <- array(0, dim = c(2, 2, 4))
+  img[, , 1] <- 1
+  img[, , 4] <- 1
+
+  tex <- texture3d(img, colorspace = "srgb")
+
+  testthat::expect_s3_class(tex, "babylon_texture")
+  testthat::expect_true(file.exists(file.path(tex$dep$src$file, tex$file)))
+})
+
+testthat::test_that("import_model3d discovers gltf sidecars and metadata", {
+  tmp_dir <- tempfile("babylon_gltf_")
+  dir.create(tmp_dir, recursive = TRUE)
+  gltf_path <- file.path(tmp_dir, "example.gltf")
+  writeLines(
+    c(
+      "{",
+      '  "asset": {"version": "2.0"},',
+      '  "buffers": [{"uri": "example.bin", "byteLength": 0}],',
+      '  "images": [{"uri": "albedo.png"}],',
+      '  "materials": [{"name": "Suit"}],',
+      '  "meshes": [{"name": "Body"}],',
+      '  "nodes": [{"name": "Root"}]',
+      "}"
+    ),
+    gltf_path
+  )
+  writeBin(raw(0), file.path(tmp_dir, "example.bin"))
+  writeBin(as.raw(c(0x89, 0x50, 0x4E, 0x47)), file.path(tmp_dir, "albedo.png"))
+
+  asset <- import_model3d(gltf_path, name = "example-asset")
+
+  testthat::expect_identical(asset$type, "asset3d")
+  testthat::expect_identical(asset$file, "example.gltf")
+  testthat::expect_true(all(c("example.gltf", "example.bin", "albedo.png") %in% asset$dep$attachment))
+  testthat::expect_identical(asset$info$materials, "Suit")
+  testthat::expect_identical(asset$info$meshes, "Body")
+  testthat::expect_identical(asset$info$nodes, "Root")
+})
+
+testthat::test_that("import_model3d does not require missing gltf sidecars for metadata", {
+  tmp_dir <- tempfile("babylon_gltf_missing_")
+  dir.create(tmp_dir, recursive = TRUE)
+  gltf_path <- file.path(tmp_dir, "example.gltf")
+  writeLines(
+    c(
+      "{",
+      '  "asset": {"version": "2.0"},',
+      '  "buffers": [{"uri": "missing.bin", "byteLength": 0}],',
+      '  "images": [{"uri": "missing.png"}],',
+      '  "materials": [{"name": "Suit"}],',
+      '  "meshes": [{"name": "Body"}],',
+      '  "nodes": [{"name": "Root"}]',
+      "}"
+    ),
+    gltf_path
+  )
+
+  asset <- import_model3d(gltf_path)
+
+  testthat::expect_identical(asset$file, "example.gltf")
+  testthat::expect_identical(asset$info$materials, "Suit")
+  testthat::expect_identical(asset$dep$attachment, "example.gltf")
+})
+
+testthat::test_that("extract_geometry3d errors clearly when gltf sidecars are missing", {
+  tmp_dir <- tempfile("babylon_gltf_missing_geo_")
+  dir.create(tmp_dir, recursive = TRUE)
+  gltf_path <- file.path(tmp_dir, "example.gltf")
+  writeLines(
+    c(
+      "{",
+      '  "asset": {"version": "2.0"},',
+      '  "buffers": [{"uri": "missing.bin", "byteLength": 0}],',
+      '  "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 0}],',
+      '  "accessors": [{"bufferView": 0, "componentType": 5126, "count": 0, "type": "VEC3"}],',
+      '  "meshes": [{"name": "Body", "primitives": [{"attributes": {"POSITION": 0}}]}]',
+      "}"
+    ),
+    gltf_path
+  )
+
+  testthat::expect_error(
+    extract_geometry3d(gltf_path, target = "Body"),
+    "Geometry extraction requires the external glTF buffer `missing.bin`"
+  )
+})
+
+testthat::test_that("set_material3d adds targeted overrides to imported assets", {
+  tmp <- tempfile(fileext = ".obj")
+  writeLines(c("o Mesh", "v 0 0 0"), tmp)
+
+  asset <- import_model3d(tmp)
+  updated <- set_material3d(
+    asset,
+    target = c("Mesh", "MaterialA"),
+    material = pbr_material3d(base_color = "tomato")
+  )
+
+  testthat::expect_length(updated$material_overrides, 1L)
+  testthat::expect_equal(updated$material_overrides[[1]]$target, c("Mesh", "MaterialA"))
+  testthat::expect_identical(updated$material_overrides[[1]]$material$type, "pbr")
+})
+
+testthat::test_that("babylon accepts imported assets without misreading material_overrides as material", {
+  tmp_dir <- tempfile("babylon_gltf_asset_")
+  dir.create(tmp_dir, recursive = TRUE)
+  gltf_path <- file.path(tmp_dir, "triangle.gltf")
+
+  positions <- writeBin(as.numeric(c(0, 0, 0, 1, 0, 0, 0, 1, 0)), raw(), size = 4, endian = "little")
+  indices <- writeBin(as.integer(c(0, 1, 2)), raw(), size = 2, endian = "little")
+  bin <- c(positions, indices)
+  writeBin(bin, file.path(tmp_dir, "triangle.bin"))
+
+  writeLines(
+    c(
+      "{",
+      '  "asset": {"version": "2.0"},',
+      '  "buffers": [{"uri": "triangle.bin", "byteLength": 42}],',
+      '  "bufferViews": [',
+      '    {"buffer": 0, "byteOffset": 0, "byteLength": 36},',
+      '    {"buffer": 0, "byteOffset": 36, "byteLength": 6}',
+      "  ],",
+      '  "accessors": [',
+      '    {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},',
+      '    {"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"}',
+      "  ],",
+      '  "meshes": [{"name": "Triangle", "primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}]',
+      "}"
+    ),
+    gltf_path
+  )
+
+  asset <- import_model3d(gltf_path)
+  widget <- babylon(data = list(asset))
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_identical(widget$x$objects[[1]]$type, "asset3d")
+})
+
+testthat::test_that("plot3d supports imported babylon assets", {
+  tmp_dir <- tempfile("babylon_gltf_plot_")
+  dir.create(tmp_dir, recursive = TRUE)
+  gltf_path <- file.path(tmp_dir, "triangle.gltf")
+
+  positions <- writeBin(as.numeric(c(0, 0, 0, 1, 0, 0, 0, 1, 0)), raw(), size = 4, endian = "little")
+  indices <- writeBin(as.integer(c(0, 1, 2)), raw(), size = 2, endian = "little")
+  bin <- c(positions, indices)
+  writeBin(bin, file.path(tmp_dir, "triangle.bin"))
+
+  writeLines(
+    c(
+      "{",
+      '  "asset": {"version": "2.0"},',
+      '  "buffers": [{"uri": "triangle.bin", "byteLength": 42}],',
+      '  "bufferViews": [',
+      '    {"buffer": 0, "byteOffset": 0, "byteLength": 36},',
+      '    {"buffer": 0, "byteOffset": 36, "byteLength": 6}',
+      "  ],",
+      '  "accessors": [',
+      '    {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},',
+      '    {"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"}',
+      "  ],",
+      '  "meshes": [{"name": "Triangle", "primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}]',
+      "}"
+    ),
+    gltf_path
+  )
+
+  asset <- import_model3d(gltf_path)
+  widget <- plot3d(asset, scaling = c(2, 2, 2))
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_identical(widget$x$objects[[1]]$type, "asset3d")
+  testthat::expect_equal(widget$x$objects[[1]]$scaling, c(2, 2, 2))
+})
+
+testthat::test_that("extract_geometry3d reads OBJ geometry and geometry helpers edit it", {
+  tmp <- tempfile(fileext = ".obj")
+  writeLines(
+    c(
+      "o Mesh",
+      "v 0 0 0",
+      "v 1 0 0",
+      "v 0 1 0",
+      "f 1 2 3"
+    ),
+    tmp
+  )
+
+  geometry <- extract_geometry3d(tmp, target = "Mesh")
+  moved <- translate_geometry3d(geometry, c(1, 2, 3))
+  scaled <- scale_geometry3d(geometry, 2)
+  reset <- set_vertices3d(geometry, geometry$vertices + 1)
+
+  testthat::expect_s3_class(geometry, "babylon_geometry")
+  testthat::expect_equal(dim(geometry$vertices), c(3L, 3L))
+  testthat::expect_equal(moved$vertices[1, ], c(1, 2, 3))
+  testthat::expect_equal(scaled$vertices[2, ], c(2, 0, 0))
+  testthat::expect_equal(reset$vertices[1, ], c(1, 1, 1))
+})
+
+testthat::test_that("extract_geometry3d reads gltf geometry and replace_geometry3d stores overrides", {
+  tmp_dir <- tempfile("babylon_gltf_geo_")
+  dir.create(tmp_dir, recursive = TRUE)
+  gltf_path <- file.path(tmp_dir, "triangle.gltf")
+
+  positions <- writeBin(as.numeric(c(0, 0, 0, 1, 0, 0, 0, 1, 0)), raw(), size = 4, endian = "little")
+  indices <- writeBin(as.integer(c(0, 1, 2)), raw(), size = 2, endian = "little")
+  bin <- c(positions, indices)
+  writeBin(bin, file.path(tmp_dir, "triangle.bin"))
+
+  writeLines(
+    c(
+      "{",
+      '  "asset": {"version": "2.0"},',
+      '  "buffers": [{"uri": "triangle.bin", "byteLength": 42}],',
+      '  "bufferViews": [',
+      '    {"buffer": 0, "byteOffset": 0, "byteLength": 36},',
+      '    {"buffer": 0, "byteOffset": 36, "byteLength": 6}',
+      "  ],",
+      '  "accessors": [',
+      '    {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},',
+      '    {"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"}',
+      "  ],",
+      '  "meshes": [{"name": "Triangle", "primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}]',
+      "}"
+    ),
+    gltf_path
+  )
+
+  geometry <- extract_geometry3d(gltf_path, target = "Triangle")
+  asset <- import_model3d(gltf_path)
+  replaced <- replace_geometry3d(asset, translate_geometry3d(geometry, c(0, 0, 2)), target = "Triangle")
+
+  testthat::expect_s3_class(geometry, "babylon_geometry")
+  testthat::expect_equal(geometry$vertices[2, ], c(1, 0, 0))
+  testthat::expect_length(replaced$geometry_overrides, 1L)
+  testthat::expect_equal(replaced$geometry_overrides[[1]]$geometry$vertices[9], 2)
+})
+
+testthat::test_that("babylon collects nested asset and texture dependencies", {
+  tmp_dir <- tempfile("babylon_asset_dep_")
+  dir.create(tmp_dir, recursive = TRUE)
+  obj_path <- file.path(tmp_dir, "asset.obj")
+  tex_path <- file.path(tmp_dir, "albedo.png")
+  writeLines(c("o Mesh", "v 0 0 0"), obj_path)
+  writeBin(as.raw(c(0x89, 0x50, 0x4E, 0x47)), tex_path)
+
+  asset <- import_model3d(obj_path)
+  asset <- set_material3d(
+    asset,
+    material = pbr_material3d(base_color_texture = texture3d(tex_path))
+  )
+
+  widget <- babylon(data = list(asset))
+
+  attachment_sets <- unlist(lapply(widget$dependencies, function(dep) dep$attachment), use.names = FALSE)
+  testthat::expect_true("asset.obj" %in% attachment_sets)
+  testthat::expect_true("albedo.png" %in% attachment_sets)
+  testthat::expect_null(widget$x$objects[[1]]$dep)
+  testthat::expect_null(widget$x$objects[[1]]$material$base_color_texture$dep)
+})
+
 testthat::test_that("morph_target3d stores same-topology morph targets", {
   reference <- make_test_mesh3d(
     rbind(
