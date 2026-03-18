@@ -105,6 +105,28 @@ For a true spherical scatterplot, use `spheres3d()`:
 spheres3d(pts, radius = 0.02, color = rep(c("steelblue", "goldenrod"), length.out = nrow(pts)))
 ```
 
+To render a triangular mesh as a wireframe instead of a shaded surface, use
+`wireframe3d()`:
+
+```r
+wireframe3d(your_morpho_mesh, color = "gray30")
+```
+
+To compare two matching-topology meshes, `meshDist()` colors the reference
+mesh by vertex displacement and can overlay a displaced wireframe plus colored
+displacement segments:
+
+```r
+meshDist(reference_mesh, target_mesh, displace = TRUE)
+```
+
+To plot only the corresponding heatmap scale as a 2D graphic, use
+`heatmap_scale()`:
+
+```r
+heatmap_scale(reference_mesh, target_mesh)
+```
+
 
 To save a static screenshot of the current scene, use `snapshot3d()` (or the
 `rgl`-style aliases `rgl.snapshot()` and `snapshot()`):

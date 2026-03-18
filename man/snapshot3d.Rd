@@ -15,9 +15,23 @@ snapshot3d(
   ...
 )
 
-rgl.snapshot <- snapshot3d
+rgl.snapshot(
+  filename = "snapshot3d.png",
+  widget = NULL,
+  vwidth = 800,
+  vheight = 800,
+  delay = 0.5,
+  ...
+)
 
-snapshot <- snapshot3d
+snapshot(
+  filename = "snapshot3d.png",
+  widget = NULL,
+  vwidth = 800,
+  vheight = 800,
+  delay = 0.5,
+  ...
+)
 }
 \arguments{
 \item{filename}{Output image path.}
@@ -25,13 +39,13 @@ snapshot <- snapshot3d
 \item{widget}{Optional Babylonian htmlwidget. If omitted, the current scene
 from the `plot3d()` accumulator is rendered.}
 
-\item{vwidth}{Viewport width passed to \code{webshot2::webshot()}.}
+\item{vwidth}{Viewport width passed to [webshot2::webshot()].}
 
-\item{vheight}{Viewport height passed to \code{webshot2::webshot()}.}
+\item{vheight}{Viewport height passed to [webshot2::webshot()].}
 
 \item{delay}{Delay (seconds) before the screenshot is taken.}
 
-\item{...}{Additional arguments forwarded to \code{webshot2::webshot()}.}
+\item{...}{Additional arguments forwarded to [webshot2::webshot()].}
 }
 \description{
 Captures a rendered Babylonian scene and writes it to an image file via

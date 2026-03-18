@@ -9,7 +9,7 @@ as_babylon_mesh(
   name = "mesh",
   color = NULL,
   alpha = NULL,
-  specularity = NULL,
+  specularity = "black",
   reverse_winding = TRUE,
   ...
 )

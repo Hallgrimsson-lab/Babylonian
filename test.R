@@ -7,11 +7,13 @@ babylon(
   )
 )
 
-library(Babylonian)
 library(Morpho)
+library(Babylonian)
 
 # Any Morpho mesh that inherits from `mesh3d`
 mesh <- file2mesh("../../PhenomicsLabs/backups/alignedRegisteredMeshes2/130101010417.obj")
+mesh2 <- file2mesh("../../PhenomicsLabs/backups/alignedRegisteredMeshes2/130102045435.obj")
+
 
 #pose it
 create_pose_3d(mesh)
@@ -53,9 +55,45 @@ shade3d(mesh, color = "gray70")
 
 
 plot3d(mesh)
+wireframe3d(mesh)
 segments3d(rbind(
   c(0, 0, 0), c(1, 0, 0),
   c(0, 1, 0), c(0, 1, 1)
 ))
 
 
+Babylonian::meshDist(mesh2, mesh, axes = F, alpha = 0, displace = T)
+Babylonian::meshDist(mesh2, mesh, axes = F, alpha = 0.5, displace = T, from =-2, to = 12)
+
+Babylonian::meshDist(
+  mesh,
+  mesh2,
+  colorramp = c("navy", "white", "gold", "firebrick"),
+  displace = TRUE
+)
+
+
+Babylonian::meshDist(
+  mesh,
+  distvec = runif(ncol(mesh$vb), -100, 100),
+  colorramp = c("navy", "white", "gold", "firebrick"),
+  displace = F
+)
+
+heatmap_scale(mesh, mesh2)
+
+heatmap_scale(
+  reference_mesh,
+  distvec = your_distvec,
+  colorramp = c("navy", "white", "firebrick"),
+  from = -2,
+  to = 2
+)
+
+# - digitize parity
+# - heatmap/meshdist/wireframe
+# - shader support??
+# - lights
+# - multiwindow
+# - movies
+# - gizmo support on lights and meshes

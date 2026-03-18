@@ -12,6 +12,7 @@ Imports:
     htmlwidgets,
     jsonlite
 Suggests:
+    ggplot2,
     knitr,
     miniUI,
     rmarkdown,

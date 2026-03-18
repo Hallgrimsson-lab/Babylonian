@@ -4,7 +4,7 @@
 \alias{plot3d.babylon_mesh}
 \title{Plot a Babylon mesh using rgl-like conventions}
 \usage{
-\method{plot3d}{babylon_mesh}(x, add = FALSE, axes = TRUE, nticks = 5, ...)
+\method{plot3d}{babylon_mesh}(x, add = FALSE, axes = TRUE, nticks = 5, specularity = "black", ...)
 }
 \arguments{
 \item{x}{A `babylon_mesh` object.}
@@ -18,8 +18,8 @@ bounding box.}
 \item{nticks}{Approximate number of tick marks per axis when `axes = TRUE`.}
 
 \item{...}{Additional graphical parameters. Recognized values include
-`color`, `alpha`, `specularity`, `position`, `rotation`, `scaling`, and
-`name`.}
+`color`, `alpha`, `specularity`, `position`, `rotation`, `scaling`,
+`name`, and `wireframe`.}
 }
 \description{
 Plot a Babylon mesh using rgl-like conventions

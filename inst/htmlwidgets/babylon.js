@@ -58,6 +58,23 @@ HTMLWidgets.widget({
     uiLayer.style.fontSize = "12px";
     uiLayer.style.lineHeight = "1.4";
     el.appendChild(uiLayer);
+    var legendLayer = document.createElement("div");
+    legendLayer.style.position = "absolute";
+    legendLayer.style.left = "12px";
+    legendLayer.style.bottom = "12px";
+    legendLayer.style.zIndex = "10";
+    legendLayer.style.display = "none";
+    legendLayer.style.minWidth = "220px";
+    legendLayer.style.padding = "10px";
+    legendLayer.style.background = "rgba(255,255,255,0.92)";
+    legendLayer.style.border = "1px solid rgba(15,23,42,0.12)";
+    legendLayer.style.borderRadius = "8px";
+    legendLayer.style.boxShadow = "0 10px 30px rgba(15,23,42,0.12)";
+    legendLayer.style.fontFamily = "Menlo, Monaco, Consolas, monospace";
+    legendLayer.style.fontSize = "12px";
+    legendLayer.style.lineHeight = "1.4";
+    legendLayer.style.pointerEvents = "none";
+    el.appendChild(legendLayer);
     var labelLayer = document.createElement("div");
     labelLayer.style.position = "absolute";
     labelLayer.style.inset = "0";
@@ -112,6 +129,54 @@ HTMLWidgets.widget({
       return null;
     }
 
+    function coerceColor4(value, alpha, fallback) {
+      var color3 = coerceColor3(value, fallback ? new BABYLON.Color3(fallback.r, fallback.g, fallback.b) : null);
+      var a = alpha === undefined ? 1 : clamp01(Number(alpha));
+
+      if (!color3) {
+        if (fallback) {
+          return fallback.clone ? fallback.clone() : fallback;
+        }
+        return null;
+      }
+
+      return new BABYLON.Color4(color3.r, color3.g, color3.b, a);
+    }
+
+    if (!BABYLON.Effect.ShadersStore["comparisonHeatmapVertexShader"]) {
+      BABYLON.Effect.ShadersStore["comparisonHeatmapVertexShader"] = [
+        "precision highp float;",
+        "attribute vec3 position;",
+        "attribute vec3 referenceNormal;",
+        "attribute vec3 comparisonPosition;",
+        "uniform mat4 worldViewProjection;",
+        "uniform float diffMin;",
+        "uniform float diffMax;",
+        "varying float vRampT;",
+        "varying float vLight;",
+        "void main(void) {",
+        "  vec3 normalDir = normalize(referenceNormal);",
+        "  float diffValue = dot(comparisonPosition - position, referenceNormal);",
+        "  float diffSpan = max(diffMax - diffMin, 0.000001);",
+        "  vRampT = clamp((diffValue - diffMin) / diffSpan, 0.0, 1.0);",
+        "  vLight = 0.4 + 0.6 * max(dot(normalDir, normalize(vec3(0.35, 0.8, 0.45))), 0.0);",
+        "  gl_Position = worldViewProjection * vec4(position, 1.0);",
+        "}"
+      ].join("\n");
+
+      BABYLON.Effect.ShadersStore["comparisonHeatmapFragmentShader"] = [
+        "precision highp float;",
+        "uniform float alpha;",
+        "uniform sampler2D colorRamp;",
+        "varying float vRampT;",
+        "varying float vLight;",
+        "void main(void) {",
+        "  vec3 vColor = texture2D(colorRamp, vec2(vRampT, 0.5)).rgb;",
+        "  gl_FragColor = vec4(vColor * vLight, alpha);",
+        "}"
+      ].join("\n");
+    }
+
     function applyTransform(mesh, primitive) {
       if (primitive.position) {
         mesh.position = new BABYLON.Vector3(
@@ -141,14 +206,20 @@ HTMLWidgets.widget({
     }
 
     function applyMaterial(mesh, primitive) {
-      if (!primitive.color && primitive.alpha === undefined && primitive.specularity === undefined) {
+      if (!primitive.color && primitive.alpha === undefined && primitive.specularity === undefined && primitive.wireframe === undefined && primitive.vertex_colors === undefined) {
         return;
       }
 
       var material = new BABYLON.StandardMaterial(mesh.name + "-material", scene);
       material.backFaceCulling = true;
 
-      if (primitive.color) {
+      if (primitive.vertex_colors) {
+        material.diffuseColor = new BABYLON.Color3(1, 1, 1);
+        material.useVertexColor = true;
+        material.useVertexColors = true;
+        mesh.useVertexColors = true;
+        mesh.hasVertexAlpha = true;
+      } else if (primitive.color) {
         material.diffuseColor = coerceColor3(primitive.color, material.diffuseColor);
       }
 
@@ -167,7 +238,79 @@ HTMLWidgets.widget({
         }
       }
 
+      if (primitive.wireframe !== undefined) {
+        material.wireframe = !!primitive.wireframe;
+      }
+
       mesh.material = material;
+    }
+
+    function createMeshDistMesh(primitive, name) {
+      var babylonMesh = new BABYLON.Mesh(primitive.name || name, scene);
+      var vertexData = new BABYLON.VertexData();
+      var normals = [];
+      var shaderMaterial;
+      var colorramp = primitive.colorramp || primitive.palette || ["#0000FF", "#FFFFFF", "#FF0000"];
+      var rampTexture;
+
+      vertexData.positions = primitive.vertices;
+      vertexData.indices = primitive.indices;
+      BABYLON.VertexData.ComputeNormals(vertexData.positions, vertexData.indices, normals);
+      vertexData.normals = normals;
+      vertexData.applyToMesh(babylonMesh);
+
+      babylonMesh.setVerticesBuffer(
+        new BABYLON.VertexBuffer(engine, primitive.comparison_vertices, "comparisonPosition", false, false, 3)
+      );
+      babylonMesh.setVerticesBuffer(
+        new BABYLON.VertexBuffer(engine, primitive.reference_normals, "referenceNormal", false, false, 3)
+      );
+
+      shaderMaterial = new BABYLON.ShaderMaterial(
+        (primitive.name || name) + "-heatmap-material",
+        scene,
+        {vertex: "comparisonHeatmap", fragment: "comparisonHeatmap"},
+        {
+          attributes: ["position", "referenceNormal", "comparisonPosition"],
+          uniforms: ["worldViewProjection", "diffMin", "diffMax", "alpha"],
+          samplers: ["colorRamp"]
+        }
+      );
+
+      rampTexture = createHeatmapRampTexture((primitive.name || name) + "-ramp", colorramp);
+      shaderMaterial.backFaceCulling = false;
+      shaderMaterial.needAlphaBlending = function() {
+        return (primitive.alpha === undefined ? 1 : primitive.alpha) < 1;
+      };
+      shaderMaterial.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
+      shaderMaterial.forceDepthWrite = primitive.alpha === undefined ? true : primitive.alpha >= 1;
+      shaderMaterial.setFloat("diffMin", primitive.diff_min);
+      shaderMaterial.setFloat("diffMax", primitive.diff_max);
+      shaderMaterial.setFloat("alpha", primitive.alpha === undefined ? 1 : primitive.alpha);
+      shaderMaterial.setTexture("colorRamp", rampTexture);
+
+      babylonMesh.material = shaderMaterial;
+      applyTransform(babylonMesh, primitive);
+      return babylonMesh;
+    }
+
+    function createHeatmapRampTexture(name, colorramp) {
+      var texture = new BABYLON.DynamicTexture(name, {width: 256, height: 1}, scene, false);
+      var ctx = texture.getContext();
+      var gradient = ctx.createLinearGradient(0, 0, 256, 0);
+      var stops = colorramp && colorramp.length ? colorramp : ["#0000FF", "#FFFFFF", "#FF0000"];
+
+      stops.forEach(function(color, index) {
+        gradient.addColorStop(stops.length === 1 ? 0 : index / (stops.length - 1), color);
+      });
+
+      ctx.clearRect(0, 0, 256, 1);
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, 256, 1);
+      texture.update(false);
+      texture.wrapU = BABYLON.Texture.CLAMP_ADDRESSMODE;
+      texture.wrapV = BABYLON.Texture.CLAMP_ADDRESSMODE;
+      return texture;
     }
 
     function createMarker(position, color, size, name, isPickable) {
@@ -302,6 +445,11 @@ HTMLWidgets.widget({
       uiLayer.innerHTML = "";
     }
 
+    function clearHeatmapLegend() {
+      legendLayer.style.display = "none";
+      legendLayer.innerHTML = "";
+    }
+
     function formatRNumber(x) {
       if (!isFinite(x)) {
         return "NA_real_";
@@ -403,6 +551,33 @@ HTMLWidgets.widget({
         "<button type='button' style='margin-top:8px; border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Copy JSON</button>";
 
       bindCopyButton(uiLayer.querySelector("button"), exportValue);
+    }
+
+    function updateHeatmapLegend(primitive) {
+      if (!primitive || primitive.type !== "meshdist3d") {
+        clearHeatmapLegend();
+        return;
+      }
+
+      var colorramp = primitive.colorramp || primitive.palette || ["#0000FF", "#FFFFFF", "#FF0000"];
+      var minValue = primitive.diff_min;
+      var maxValue = primitive.diff_max;
+      var midValue = (minValue + maxValue) / 2;
+      var gradient = "linear-gradient(90deg, " + colorramp.map(function(color, index) {
+        var stop = colorramp.length === 1 ? 0 : (index / (colorramp.length - 1)) * 100;
+        return color + " " + stop + "%";
+      }).join(", ") + ")";
+
+      legendLayer.style.display = "block";
+      legendLayer.innerHTML =
+        "<div style='font-weight:700; margin-bottom:6px;'>Difference Scale</div>" +
+        "<div style='margin-bottom:8px; color:#475569;'>Signed displacement</div>" +
+        "<div style='height:18px; border-radius:999px; border:1px solid rgba(15,23,42,0.15); background:" + gradient + ";'></div>" +
+        "<div style='display:flex; justify-content:space-between; gap:12px; margin-top:6px; color:#334155;'>" +
+        "<span>" + formatRNumber(minValue) + "</span>" +
+        "<span>" + formatRNumber(midValue) + "</span>" +
+        "<span>" + formatRNumber(maxValue) + "</span>" +
+        "</div>";
     }
 
     function currentPar3dState() {
@@ -725,22 +900,35 @@ HTMLWidgets.widget({
     }
 
     function createSegmentLines(primitive, name) {
-      var lineColor = coerceColor3(primitive.color, BABYLON.Color3.FromHexString("#111111"));
+      var lines = [];
+      var colors = [];
+      var fallback = BABYLON.Color4.FromColor3(BABYLON.Color3.FromHexString("#111111"), primitive.alpha === undefined ? 1 : primitive.alpha);
+
       for (var i = 0; i < primitive.points.length; i += 2) {
-        var segment = BABYLON.MeshBuilder.CreateLines(
-          name + "-segment-" + (i / 2),
-          {
-            points: [
-              new BABYLON.Vector3(primitive.points[i][0], primitive.points[i][1], primitive.points[i][2]),
-              new BABYLON.Vector3(primitive.points[i + 1][0], primitive.points[i + 1][1], primitive.points[i + 1][2])
-            ],
-            updatable: false
-          },
-          scene
+        var segmentColor = coerceColor4(
+          pointColorAt(primitive.color, i / 2, "#111111"),
+          primitive.alpha,
+          fallback
         );
-        segment.color = lineColor;
-        segment.isPickable = false;
+
+        lines.push([
+          new BABYLON.Vector3(primitive.points[i][0], primitive.points[i][1], primitive.points[i][2]),
+          new BABYLON.Vector3(primitive.points[i + 1][0], primitive.points[i + 1][1], primitive.points[i + 1][2])
+        ]);
+        colors.push([segmentColor, segmentColor]);
       }
+
+      var lineSystem = BABYLON.MeshBuilder.CreateLineSystem(
+        name,
+        {
+          lines: lines,
+          colors: colors,
+          updatable: false
+        },
+        scene
+      );
+      lineSystem.isPickable = false;
+      return lineSystem;
     }
 
     function alignPlaneToNormal(mesh, normal) {
@@ -930,6 +1118,7 @@ HTMLWidgets.widget({
         var objects = payload.objects || [];
         var interaction = payload.interaction || null;
         currentSceneOptions = payload.scene || null;
+        var heatmapLegendPrimitive = null;
 
         var pendingImports = 0;
         var sceneUpdated = false;
@@ -944,6 +1133,13 @@ HTMLWidgets.widget({
             schedulePoseStatePublish();
           }
         }
+
+        objects.forEach(function(primitive) {
+          if (!heatmapLegendPrimitive && primitive.type === "meshdist3d") {
+            heatmapLegendPrimitive = primitive;
+          }
+        });
+        updateHeatmapLegend(heatmapLegendPrimitive);
 
         objects.forEach(function(primitive, i) {
           var name = primitive.type + i;
@@ -983,6 +1179,9 @@ HTMLWidgets.widget({
 
             vertexData.positions = primitive.vertices;
             vertexData.indices = primitive.indices;
+            if (primitive.vertex_colors) {
+              vertexData.colors = primitive.vertex_colors;
+            }
             BABYLON.VertexData.ComputeNormals(vertexData.positions, vertexData.indices, normals);
             vertexData.normals = normals;
             vertexData.applyToMesh(babylonMesh);
@@ -991,6 +1190,12 @@ HTMLWidgets.widget({
             applyMaterial(babylonMesh, primitive);
             if (!primaryMesh) {
               primaryMesh = babylonMesh;
+            }
+            scheduleFrame();
+          } else if (primitive.type === "meshdist3d") {
+            var heatmapMesh = createMeshDistMesh(primitive, name);
+            if (!primaryMesh) {
+              primaryMesh = heatmapMesh;
             }
             scheduleFrame();
           } else if (primitive.type === "points3d") {

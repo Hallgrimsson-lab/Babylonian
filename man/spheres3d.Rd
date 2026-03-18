@@ -11,7 +11,7 @@ spheres3d(
   radius = 0.03,
   color = "gray40",
   alpha = 1,
-  specularity = 0.1,
+  specularity = "black",
   add = TRUE,
   axes = TRUE,
   nticks = 5
