@@ -142,6 +142,24 @@ HTMLWidgets.widget({
       });
     }
 
+    function pushShinyInputValue(id, value) {
+      if (!id || typeof HTMLWidgets === "undefined" || !HTMLWidgets.shinyMode || typeof Shiny === "undefined" || !Shiny) {
+        return false;
+      }
+
+      if (typeof Shiny.setInputValue === "function") {
+        Shiny.setInputValue(id, value, {priority: "event"});
+        return true;
+      }
+
+      if (typeof Shiny.onInputChange === "function") {
+        Shiny.onInputChange(id, value);
+        return true;
+      }
+
+      return false;
+    }
+
     function isHexColor(value) {
       return typeof value === "string" && /^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(value);
     }
@@ -389,6 +407,22 @@ HTMLWidgets.widget({
       return marker;
     }
 
+    function createLightHelper(light, primitive, name) {
+      if (!light || !light.position) {
+        return null;
+      }
+
+      var helperSize = currentSceneBounds && currentSceneBounds.radius ?
+        Math.max(currentSceneBounds.radius * 0.05, 0.03) :
+        0.1;
+      var helperColor = primitive && primitive.diffuse ? primitive.diffuse : "#f59e0b";
+      var helper = createMarker(light.position, helperColor, helperSize, name + "-helper", false);
+      helper.isPickable = false;
+      helper.metadata = helper.metadata || {};
+      helper.metadata.babylonianHelper = true;
+      return helper;
+    }
+
     function createPointBillboard(position, color, alpha, size, name) {
       var plane = registerNode(BABYLON.MeshBuilder.CreatePlane(name, {size: size}, scene));
       plane.position = position.clone();
@@ -549,6 +583,33 @@ HTMLWidgets.widget({
         "parZoom <- " + formatRNumber(payload.zoom),
         "parUserMatrix <- " + formatRMatrix(payload.userMatrix)
       ].join("\n");
+    }
+
+    function vectorToArray(vector) {
+      if (!vector) {
+        return [0, 0, 0];
+      }
+      return [Number(vector.x) || 0, Number(vector.y) || 0, Number(vector.z) || 0];
+    }
+
+    function nodeRotationArray(node) {
+      if (!node) {
+        return [0, 0, 0];
+      }
+
+      if (node.rotationQuaternion && node.rotationQuaternion.toEulerAngles) {
+        return vectorToArray(node.rotationQuaternion.toEulerAngles());
+      }
+
+      if (node.rotation) {
+        return vectorToArray(node.rotation);
+      }
+
+      return [0, 0, 0];
+    }
+
+    function editorTargetId(index) {
+      return "scene-target-" + index;
     }
 
     function fallbackCopyText(value) {
@@ -757,6 +818,280 @@ HTMLWidgets.widget({
       bindCopyButton(uiLayer.querySelector("button"), exportValue);
     }
 
+    function selectedEditorTarget(state) {
+      if (!state || !state.targets || !state.targets.length) {
+        return null;
+      }
+
+      var selected = null;
+      state.targets.forEach(function(target) {
+        if (target.id === state.selectedId) {
+          selected = target;
+        }
+      });
+
+      return selected || state.targets[0];
+    }
+
+    function attachEditorTarget(state, target) {
+      if (!state || !state.gizmoManager) {
+        return;
+      }
+
+      if (state.gizmoManager.attachToNode) {
+        state.gizmoManager.attachToNode(target ? target.node : null);
+        return;
+      }
+
+      if (state.gizmoManager.attachToMesh) {
+        state.gizmoManager.attachToMesh(target ? target.node : null);
+      }
+    }
+
+    function syncEditorGizmoState(state) {
+      if (!state || !state.gizmoManager) {
+        return;
+      }
+
+      var target = selectedEditorTarget(state);
+      var canScale = target && target.kind === "mesh";
+      var visible = state.gizmosVisible !== false && state.gizmoMode !== "orbit";
+
+      attachEditorTarget(state, visible ? target : null);
+      state.gizmoManager.positionGizmoEnabled = visible && state.gizmoMode === "translate" && !!target;
+      state.gizmoManager.rotationGizmoEnabled = visible && state.gizmoMode === "rotate" && !!target;
+      state.gizmoManager.scaleGizmoEnabled = visible && state.gizmoMode === "scale" && canScale;
+
+      if (state.gizmoManager.gizmos && state.gizmoManager.gizmos.scaleGizmo) {
+        state.gizmoManager.gizmos.scaleGizmo.uniformScaling = true;
+      }
+    }
+
+    function updateLightHelpers(state) {
+      if (!state || !state.targets || !state.targets.length) {
+        return;
+      }
+
+      state.targets.forEach(function(target) {
+        if (target.kind === "light" && target.helper && target.node && target.node.position) {
+          target.helper.position.copyFrom(target.node.position);
+        }
+      });
+    }
+
+    function buildSceneEditorPayload(state) {
+      var targets = state && state.targets ? state.targets : [];
+      return {
+        view: currentPar3dState(),
+        objects: targets.map(function(target) {
+          var entry = {
+            index: target.index + 1,
+            primitive_type: target.primitiveType,
+            node_type: target.kind,
+            name: target.name || null
+          };
+
+          if (target.kind === "light") {
+            entry.light_type = target.primitive.light_type || "hemispheric";
+            if (target.node.position) {
+              entry.position = vectorToArray(target.node.position);
+            }
+            if (target.node.direction) {
+              entry.direction = vectorToArray(target.node.direction);
+            }
+            if (target.primitive.intensity !== undefined) {
+              entry.intensity = Number(target.primitive.intensity);
+            }
+            if (target.primitive.diffuse !== undefined) {
+              entry.diffuse = target.primitive.diffuse;
+            }
+            if (target.primitive.specular !== undefined) {
+              entry.specular = target.primitive.specular;
+            }
+            if (target.primitive.ground_color !== undefined) {
+              entry.ground_color = target.primitive.ground_color;
+            }
+            if (target.primitive.angle !== undefined) {
+              entry.angle = Number(target.primitive.angle);
+            }
+            if (target.primitive.exponent !== undefined) {
+              entry.exponent = Number(target.primitive.exponent);
+            }
+            if (target.primitive.range !== undefined) {
+              entry.range = Number(target.primitive.range);
+            }
+            if (target.primitive.enabled !== undefined) {
+              entry.enabled = target.primitive.enabled !== false;
+            }
+            return entry;
+          }
+
+          entry.position = vectorToArray(target.node.position);
+          entry.rotation = nodeRotationArray(target.node);
+          entry.scaling = vectorToArray(target.node.scaling || new BABYLON.Vector3(1, 1, 1));
+          return entry;
+        }),
+        selected: state.selectedId || null,
+        gizmo_mode: state.gizmoMode,
+        gizmos_visible: state.gizmosVisible !== false
+      };
+    }
+
+    function updateSceneEditorPanel(state, payload) {
+      if (!state || state.mode !== "edit_scene3d") {
+        clearUiPanel();
+        return;
+      }
+
+      if (!state.ui) {
+        uiLayer.style.display = "block";
+        uiLayer.innerHTML =
+          "<div style='font-weight:700; margin-bottom:6px;'>Scene Editor</div>" +
+          "<div style='margin-bottom:6px; color:#475569;'>Select a mesh or light, edit it with gizmos, then copy or return the saved scene state.</div>" +
+          "<label style='display:block; margin-bottom:4px; color:#334155;'>Target</label>" +
+          "<select data-role='target' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'></select>" +
+          "<div style='display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap;'>" +
+          "<button type='button' data-mode='orbit' style='border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Orbit</button>" +
+          "<button type='button' data-mode='translate' style='border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Move</button>" +
+          "<button type='button' data-mode='rotate' style='border:0; border-radius:6px; background:#334155; color:white; padding:6px 10px; cursor:pointer;'>Rotate</button>" +
+          "<button type='button' data-mode='scale' style='border:0; border-radius:6px; background:#475569; color:white; padding:6px 10px; cursor:pointer;'>Scale</button>" +
+          "</div>" +
+          "<label data-role='intensity-label' style='display:block; margin-bottom:4px; color:#334155;'>Intensity <span data-role='intensity-value'>1</span></label>" +
+          "<input data-role='intensity-slider' type='range' min='0' max='5' step='0.01' value='1' style='width:100%; margin-bottom:8px;' />" +
+          "<button type='button' data-role='toggle-gizmo' style='width:100%; margin-bottom:8px; border:0; border-radius:6px; background:#1d4ed8; color:white; padding:6px 10px; cursor:pointer;'>Hide Gizmo</button>" +
+          "<textarea readonly data-role='state-json' style='width:100%; min-height:160px; resize:vertical; font:inherit; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#f8fafc;'></textarea>" +
+          "<button type='button' data-role='copy-state' style='margin-top:8px; border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Copy JSON</button>";
+
+        state.ui = {
+          targetSelect: uiLayer.querySelector("[data-role='target']"),
+          intensityLabel: uiLayer.querySelector("[data-role='intensity-label']"),
+          intensityValue: uiLayer.querySelector("[data-role='intensity-value']"),
+          intensitySlider: uiLayer.querySelector("[data-role='intensity-slider']"),
+          toggleButton: uiLayer.querySelector("[data-role='toggle-gizmo']"),
+          stateText: uiLayer.querySelector("[data-role='state-json']"),
+          copyButton: uiLayer.querySelector("[data-role='copy-state']"),
+          modeButtons: Array.prototype.slice.call(uiLayer.querySelectorAll("[data-mode]"))
+        };
+
+        state.ui.targetSelect.addEventListener("change", function(evt) {
+          state.selectedId = evt.target.value;
+          syncEditorGizmoState(state);
+          updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+        });
+
+        state.ui.modeButtons.forEach(function(button) {
+          button.addEventListener("click", function() {
+            state.gizmoMode = button.getAttribute("data-mode");
+            syncEditorGizmoState(state);
+            updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+          });
+        });
+
+        state.ui.toggleButton.addEventListener("click", function() {
+          state.gizmosVisible = !state.gizmosVisible;
+          syncEditorGizmoState(state);
+          updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+        });
+
+        state.ui.intensitySlider.addEventListener("input", function(evt) {
+          var target = selectedEditorTarget(state);
+          var value = Number(evt.target.value);
+          if (!target || target.kind !== "light" || !isFinite(value)) {
+            return;
+          }
+          target.node.intensity = value;
+          target.primitive.intensity = value;
+          state.ui.intensityValue.textContent = value.toFixed(2).replace(/\.?0+$/, "");
+          publishSceneEditorState(state);
+        });
+
+        bindCopyButton(state.ui.copyButton, function() {
+          return state.ui.stateText.value;
+        });
+      }
+
+      uiLayer.style.display = "block";
+
+      var select = state.ui.targetSelect;
+      var selected = selectedEditorTarget(state);
+      select.innerHTML = "";
+      (state.targets || []).forEach(function(target) {
+        var option = document.createElement("option");
+        option.value = target.id;
+        option.textContent = target.label;
+        option.selected = !!selected && target.id === selected.id;
+        select.appendChild(option);
+      });
+      if (!state.targets.length) {
+        var option = document.createElement("option");
+        option.value = "";
+        option.textContent = "No editable meshes or lights";
+        option.selected = true;
+        select.appendChild(option);
+      }
+      select.disabled = !state.targets.length;
+
+      state.ui.modeButtons.forEach(function(button) {
+        var mode = button.getAttribute("data-mode");
+        var active = mode === state.gizmoMode;
+        var disableScale = mode === "scale" && (!selected || selected.kind !== "mesh");
+        button.disabled = disableScale || !state.targets.length;
+        button.style.opacity = button.disabled ? "0.5" : "1";
+        button.style.background = active ? "#0f172a" : "#475569";
+      });
+
+      var showIntensity = !!selected && selected.kind === "light";
+      state.ui.intensityLabel.style.display = showIntensity ? "block" : "none";
+      state.ui.intensitySlider.style.display = showIntensity ? "block" : "none";
+      if (showIntensity) {
+        var intensity = selected.node && selected.node.intensity !== undefined ?
+          Number(selected.node.intensity) :
+          Number(selected.primitive.intensity || 1);
+        if (!isFinite(intensity)) {
+          intensity = 1;
+        }
+        state.ui.intensitySlider.value = String(intensity);
+        state.ui.intensityValue.textContent = intensity.toFixed(2).replace(/\.?0+$/, "");
+      }
+
+      state.ui.toggleButton.disabled = !state.targets.length;
+      state.ui.toggleButton.textContent = state.gizmosVisible === false || state.gizmoMode === "orbit" ? "Show Gizmo" : "Hide Gizmo";
+      state.ui.stateText.value = JSON.stringify(payload, null, 2);
+    }
+
+    function publishSceneEditorState(state) {
+      if (!state || state.mode !== "edit_scene3d") {
+        return;
+      }
+
+      var payload = buildSceneEditorPayload(state);
+      var text = JSON.stringify(payload);
+
+      if (!state.lastRenderedText || state.lastRenderedText !== text) {
+        updateSceneEditorPanel(state, payload);
+        state.lastRenderedText = text;
+      }
+
+      if (state.lastPublishedText === text) {
+        return;
+      }
+
+      state.lastPublishedText = text;
+
+      if (state.widgetId) {
+        if (payload.view) {
+          pushShinyInputValue(
+            state.widgetId + "_par3d",
+            JSON.stringify(payload.view)
+          );
+        }
+        pushShinyInputValue(
+          state.widgetId + "_scene_state",
+          text
+        );
+      }
+    }
+
     function publishPoseState(state) {
       if (!state || state.mode !== "pose_3d") {
         return;
@@ -769,11 +1104,10 @@ HTMLWidgets.widget({
 
       updatePosePanel(state, payload);
 
-      if (HTMLWidgets.shinyMode && state.widgetId) {
-        Shiny.setInputValue(
+      if (state.widgetId) {
+        pushShinyInputValue(
           state.widgetId + "_par3d",
-          JSON.stringify(payload),
-          {priority: "event"}
+          JSON.stringify(payload)
         );
       }
     }
@@ -800,16 +1134,18 @@ HTMLWidgets.widget({
 
       updateDigitizePanel(state);
 
-      if (HTMLWidgets.shinyMode && state.widgetId) {
-        Shiny.setInputValue(
+      if (state.widgetId) {
+        pushShinyInputValue(
           state.widgetId + "_landmarks",
-          JSON.stringify(state.points),
-          {priority: "event"}
+          JSON.stringify(state.points)
         );
       }
     }
 
     function initializeInteraction(interaction, primaryMesh) {
+      if (activeInteractionState && activeInteractionState.dispose) {
+        activeInteractionState.dispose();
+      }
       activeInteractionState = null;
 
       if (digitizeObserver) {
@@ -820,6 +1156,64 @@ HTMLWidgets.widget({
       if (publishViewStateHandle !== null) {
         window.cancelAnimationFrame(publishViewStateHandle);
         publishViewStateHandle = null;
+      }
+
+      if (interaction && interaction.mode === "edit_scene3d") {
+        var editableTargets = arguments.length > 2 ? arguments[2] : [];
+        if (!BABYLON.GizmoManager) {
+          activeInteractionState = {
+            mode: interaction.mode,
+            widgetId: el.id || null,
+            targets: editableTargets || [],
+            gizmoManager: null,
+            selectedId: editableTargets && editableTargets.length ? editableTargets[0].id : null,
+            gizmoMode: "orbit",
+            gizmosVisible: false
+          };
+          publishSceneEditorState(activeInteractionState);
+          return activeInteractionState;
+        }
+        var gizmoManager = new BABYLON.GizmoManager(scene);
+        gizmoManager.usePointerToAttachGizmos = false;
+        gizmoManager.clearGizmoOnEmptyPointerEvent = false;
+        var editorState = {
+          mode: interaction.mode,
+          widgetId: el.id || null,
+          targets: editableTargets || [],
+          helpers: [],
+          gizmoManager: gizmoManager,
+          selectedId: editableTargets && editableTargets.length ? editableTargets[0].id : null,
+          gizmoMode: "orbit",
+          gizmosVisible: false,
+          dispose: function() {
+            clearUiPanel();
+            attachEditorTarget(editorState, null);
+            if (editorState.helpers) {
+              editorState.helpers.forEach(function(helper) {
+                if (helper && helper.dispose) {
+                  helper.dispose();
+                }
+              });
+              editorState.helpers = [];
+            }
+            gizmoManager.dispose();
+          }
+        };
+        activeInteractionState = editorState;
+
+        editorState.targets.forEach(function(target) {
+          if (target.kind === "light") {
+            target.helper = createLightHelper(target.node, target.primitive, target.name || target.id);
+            if (target.helper) {
+              editorState.helpers.push(target.helper);
+            }
+          }
+        });
+        updateLightHelpers(editorState);
+
+        syncEditorGizmoState(editorState);
+        publishSceneEditorState(editorState);
+        return editorState;
       }
 
       if (interaction && interaction.mode === "pose_3d") {
@@ -1001,6 +1395,23 @@ HTMLWidgets.widget({
       ));
       lineSystem.isPickable = false;
       return lineSystem;
+    }
+
+    function registerEditableTarget(targets, primitive, index, node, kind, label) {
+      if (!targets || !node) {
+        return;
+      }
+
+      targets.push({
+        id: editorTargetId(index),
+        index: index,
+        primitiveType: primitive.type,
+        primitive: primitive,
+        name: primitive.name || null,
+        node: node,
+        kind: kind,
+        label: label || ((primitive.name || (primitive.type + " " + (index + 1))) + " [" + kind + "]")
+      });
     }
 
     function createLight(primitive, name) {
@@ -1235,6 +1646,10 @@ HTMLWidgets.widget({
       if (axisLabelState.length) {
         updateAxisLabels();
       }
+      if (activeInteractionState && activeInteractionState.mode === "edit_scene3d") {
+        updateLightHelpers(activeInteractionState);
+        publishSceneEditorState(activeInteractionState);
+      }
     });
 
     // Resize the engine on window resize
@@ -1256,6 +1671,7 @@ HTMLWidgets.widget({
         currentSceneOptions = payload.scene || null;
         var heatmapLegendPrimitive = null;
         var hasCustomLights = false;
+        var editableTargets = [];
 
         var pendingImports = 0;
         var sceneUpdated = false;
@@ -1287,26 +1703,31 @@ HTMLWidgets.widget({
         objects.forEach(function(primitive, i) {
           var name = primitive.type + i;
           if (primitive.type === "light3d") {
-            createLight(primitive, name);
+            var sceneLight = createLight(primitive, name);
+            registerEditableTarget(editableTargets, primitive, i, sceneLight, "light");
           } else if (primitive.type === "sphere") {
             var sphere = registerNode(BABYLON.MeshBuilder.CreateSphere(name, {diameter: primitive.diameter}, scene));
             applyTransform(sphere, primitive);
             applyMaterial(sphere, primitive);
+            registerEditableTarget(editableTargets, primitive, i, sphere, "mesh");
             scheduleFrame();
           } else if (primitive.type === "box") {
             var box = registerNode(BABYLON.MeshBuilder.CreateBox(name, {size: primitive.size}, scene));
             applyTransform(box, primitive);
             applyMaterial(box, primitive);
+            registerEditableTarget(editableTargets, primitive, i, box, "mesh");
             scheduleFrame();
           } else if (primitive.type === "plane") {
             var plane = registerNode(BABYLON.MeshBuilder.CreatePlane(name, {width: primitive.width, height: primitive.height}, scene));
             applyTransform(plane, primitive);
             applyMaterial(plane, primitive);
+            registerEditableTarget(editableTargets, primitive, i, plane, "mesh");
             scheduleFrame();
           } else if (primitive.type === "cylinder") {
             var cylinder = registerNode(BABYLON.MeshBuilder.CreateCylinder(name, {diameter: primitive.diameter, height: primitive.height}, scene));
             applyTransform(cylinder, primitive);
             applyMaterial(cylinder, primitive);
+            registerEditableTarget(editableTargets, primitive, i, cylinder, "mesh");
             scheduleFrame();
           } else if (primitive.type === "cone") {
             var cone = registerNode(BABYLON.MeshBuilder.CreateCylinder(name, {
@@ -1316,6 +1737,7 @@ HTMLWidgets.widget({
             }, scene));
             applyTransform(cone, primitive);
             applyMaterial(cone, primitive);
+            registerEditableTarget(editableTargets, primitive, i, cone, "mesh");
             scheduleFrame();
           } else if (primitive.type === "mesh3d") {
             var babylonMesh = registerNode(new BABYLON.Mesh(primitive.name || name, scene));
@@ -1333,12 +1755,14 @@ HTMLWidgets.widget({
 
             applyTransform(babylonMesh, primitive);
             applyMaterial(babylonMesh, primitive);
+            registerEditableTarget(editableTargets, primitive, i, babylonMesh, "mesh");
             if (!primaryMesh) {
               primaryMesh = babylonMesh;
             }
             scheduleFrame();
           } else if (primitive.type === "meshdist3d") {
             var heatmapMesh = createMeshDistMesh(primitive, name);
+            registerEditableTarget(editableTargets, primitive, i, heatmapMesh, "mesh");
             if (!primaryMesh) {
               primaryMesh = heatmapMesh;
             }
@@ -1397,7 +1821,7 @@ HTMLWidgets.widget({
                 }
               });
               pendingImports -= 1;
-              initializeInteraction(interaction, primaryMesh);
+              initializeInteraction(interaction, primaryMesh, editableTargets);
               scheduleFrame();
             }, null, function(scene, message, exception) {
               console.error("Error importing mesh:", message, exception);
@@ -1409,7 +1833,7 @@ HTMLWidgets.widget({
           }
         });
 
-        initializeInteraction(interaction, primaryMesh);
+        initializeInteraction(interaction, primaryMesh, editableTargets);
 
         if (sceneUpdated && pendingImports === 0) {
           frameScene();

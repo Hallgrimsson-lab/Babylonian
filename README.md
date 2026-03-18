@@ -125,6 +125,29 @@ light3d_directional(
 )
 ```
 
+For figure setup, `edit_scene3d()` opens a gizmo-based editor so you can move
+lights, translate/rotate/scale meshes, then reuse the saved scene state:
+
+```r
+scene <- babylon(
+  data = list(
+    as_babylon_mesh(your_morpho_mesh, color = "gray75"),
+    as_babylon_light(
+      type = "directional",
+      name = "key",
+      direction = c(-0.5, -1, 0.2),
+      intensity = 0.9,
+      diffuse = "#fff7cc",
+      specular = "#ffffff"
+    )
+  )
+)
+
+state <- edit_scene3d(scene)
+scene <- apply_scene_state(scene, state = state)
+snapshot3d("figure.png", widget = scene)
+```
+
 To compare two matching-topology meshes, `meshDist()` colors the reference
 mesh by vertex displacement and can overlay a displaced wireframe plus colored
 displacement segments:

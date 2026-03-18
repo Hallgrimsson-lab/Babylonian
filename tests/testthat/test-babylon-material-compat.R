@@ -150,6 +150,20 @@ testthat::test_that("light3d wrappers set the expected Babylon light types", {
   testthat::expect_identical(hemispheric$x$objects[[1]]$ground_color, "#666666")
 })
 
+testthat::test_that("as_babylon_light creates reusable light specs", {
+  light <- as_babylon_light(
+    type = "directional",
+    name = "key",
+    direction = c(-0.5, -1, 0.2),
+    intensity = 0.9
+  )
+
+  testthat::expect_s3_class(light, "babylon_light")
+  testthat::expect_identical(light$type, "light3d")
+  testthat::expect_identical(light$light_type, "directional")
+  testthat::expect_equal(light$direction, c(-0.5, -1, 0.2))
+})
+
 testthat::test_that("light3d validates light arguments", {
   testthat::expect_error(
     light3d(type = "laser", add = FALSE, axes = FALSE),
@@ -165,6 +179,71 @@ testthat::test_that("light3d validates light arguments", {
     light3d(type = "spot", angle = -1, add = FALSE, axes = FALSE),
     "`angle` must be a finite numeric scalar greater than or equal to 0."
   )
+})
+
+testthat::test_that("edit_scene3d returns an editor widget in non-interactive mode", {
+  mesh <- structure(list(type = "mesh3d"), class = c("babylon_mesh", "list"))
+
+  widget <- edit_scene3d(mesh)
+
+  testthat::expect_identical(widget$x$interaction$mode, "edit_scene3d")
+})
+
+testthat::test_that("edit_scene3d accepts Babylon widgets directly", {
+  scene <- babylon(
+    data = list(
+      list(type = "sphere", diameter = 1),
+      create_babylon_light(type = "directional", direction = c(0, -1, 0), name = "key")
+    )
+  )
+
+  widget <- edit_scene3d(scene)
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_identical(widget$x$interaction$mode, "edit_scene3d")
+  testthat::expect_equal(length(widget$x$objects), 2L)
+})
+
+testthat::test_that("apply_scene_state updates meshes, lights, and view state", {
+  mesh <- structure(
+    list(
+      type = "mesh3d",
+      name = "specimen",
+      position = c(0, 0, 0),
+      rotation = c(0, 0, 0),
+      scaling = c(1, 1, 1)
+    ),
+    class = c("babylon_mesh", "list")
+  )
+  key <- create_babylon_light(
+    type = "directional",
+    name = "key",
+    direction = c(0, -1, 0),
+    intensity = 0.5
+  )
+
+  widget <- babylon(
+    data = list(mesh, key),
+    scene = list(view = serialize_par3d(list(zoom = 1, userMatrix = diag(4))))
+  )
+
+  state <- list(
+    view = list(zoom = 1.5, userMatrix = diag(4)),
+    objects = list(
+      list(index = 1, name = "specimen", position = c(1, 2, 3), rotation = c(0.1, 0.2, 0.3), scaling = c(2, 2, 2)),
+      list(index = 2, name = "key", direction = c(1, -1, 0), intensity = 0.9)
+    )
+  )
+
+  updated <- apply_scene_state(widget, state = state)
+
+  testthat::expect_equal(updated$x$objects[[1]]$position, c(1, 2, 3))
+  testthat::expect_equal(updated$x$objects[[1]]$rotation, c(0.1, 0.2, 0.3))
+  testthat::expect_equal(updated$x$objects[[1]]$scaling, c(2, 2, 2))
+  testthat::expect_equal(updated$x$objects[[2]]$direction, c(1, -1, 0))
+  testthat::expect_equal(updated$x$objects[[2]]$intensity, 0.9)
+  testthat::expect_equal(updated$x$scene$view$zoom, 1.5)
+  testthat::expect_equal(last_scene_state()$objects[[1]]$position, c(1, 2, 3))
 })
 
 make_test_mesh3d <- function(vertices, faces = matrix(c(1, 2, 3), nrow = 3)) {

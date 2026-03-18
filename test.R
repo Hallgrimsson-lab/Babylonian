@@ -90,6 +90,97 @@ heatmap_scale(
   to = 2
 )
 
+
+plot3d(mesh, color = "gray75", specularity = 0.3)
+light3d_hemispheric(intensity = 0.35, ground_color = "gray20")
+light3d_directional(
+  direction = c(-0.5, -1, 0.2),
+  intensity = 0.9,
+  diffuse = "#fff7cc"
+)
+
+
+
+# scene editing/gizmos
+testscene <- babylon(
+  data = list(
+    as_babylon_mesh(mesh, color = "gray75"),
+    as_babylon_light(
+      type = "directional",
+      name = "key",
+      direction = c(-0.5, -1, 0.2),
+      intensity = 0.9,
+      diffuse = "#fff7cc",
+      specular = "#ffffff"
+    )
+  )
+)
+
+mesh$vb[-4,] <- mesh$vb[-4,]/10
+testscene <- plot3d(mesh)
+
+state <- edit_scene3d(testscene)
+scene <- apply_scene_state(scene, state = state)
+snapshot3d("figure.png", widget = scene)
+
+
+
+# light testing
+
+scene <- babylon(
+  data = list(
+    as_babylon_mesh(mesh, name = "specimen", color = "gray75", specularity = 0.35),
+    
+    as_babylon_light(
+      type = "point",
+      name = "point",
+      position = c(120, 80, 120),
+      intensity = 0.8,
+      diffuse = "#ffd166",
+      specular = "#ffffff",
+      range = 500
+    ),
+    
+    as_babylon_light(
+      type = "spot",
+      name = "spot",
+      position = c(-140, 120, 80),
+      direction = c(0.7, -0.6, -0.2),
+      intensity = 1.1,
+      diffuse = "#7dd3fc",
+      specular = "#ffffff",
+      angle = pi / 5,
+      exponent = 2,
+      range = 600
+    ),
+    
+    as_babylon_light(
+      type = "directional",
+      name = "directional",
+      position = c(0, 160, -160),
+      direction = c(0.1, -1, 0.5),
+      intensity = 0.7,
+      diffuse = "#fff7cc",
+      specular = "#ffffff"
+    ),
+    
+    as_babylon_light(
+      type = "hemispheric",
+      name = "hemispheric",
+      position = c(0, 180, 0),
+      direction = c(0, 1, 0),
+      intensity = 0.35,
+      diffuse = "#ffffff",
+      specular = "#dbeafe",
+      ground_color = "#334155"
+    )
+  )
+)
+
+state <- edit_scene3d(scene)
+scene <- apply_scene_state(scene, state = state)
+snapshot3d("lights-demo.png", widget = scene)
+
 # - digitize parity
 # - shader support??
 # - lights
