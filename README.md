@@ -10,7 +10,7 @@ To install the development version of `Babylonian`, you can use the `devtools` p
 
 ```r
 # install.packages("devtools")
-devtools::install_github("your-username/Babylonian")
+devtools::install_github("Hallgrimsson-lab/Babylonian")
 ```
 
 ## Usage
@@ -68,11 +68,10 @@ library(Babylonian)
 library(Morpho)
 
 # Any Morpho mesh that inherits from `mesh3d`
-mesh <- your_morpho_mesh
+mesh <- file2mesh("my_mesh.obj")
 
 babylon(
   data = list(
-    list(type = "sphere", diameter = 1, position = c(-15, 0, 0)),
     as_babylon_mesh(mesh, color = "#d97706", alpha = 0.9)
   )
 )
@@ -89,7 +88,7 @@ look like `rgl` code:
 ```r
 library(Babylonian)
 
-plot3d(your_morpho_mesh, color = "#d97706")
+plot3d(mesh, color = "#d97706")
 ```
 
 That works directly for `mesh3d` objects imported through Morpho, and you can
@@ -110,34 +109,16 @@ plot3d(your_morpho_mesh, axes = FALSE)
 ```
 
 `plot3d()` starts a fresh scene by default. Wrapper helpers like `points3d()`
-and `spheres3d()` add to the current scene by default, so a typical layered
-workflow looks like this:
+and `spheres3d()` add to the current scene by default like rgl does:
 
 ```r
-plot3d(your_morpho_mesh, add = FALSE, color = "gray70")
+plot3d(mesh, add = FALSE, color = "gray70")
 points3d(matrix(rnorm(60), ncol = 3), color = "tomato")
-```
-
-Any `n x 3` matrix can also be plotted directly as 3D points:
-
-```r
-pts <- matrix(rnorm(300), ncol = 3)
-plot3d(pts, color = "tomato")
-
-plot3d(pts, color = rep(c("tomato", "steelblue"), length.out = nrow(pts)))
-```
-
-For a true spherical scatterplot, use `spheres3d()`:
-
-```r
 spheres3d(pts, radius = 0.02, color = rep(c("steelblue", "goldenrod"), length.out = nrow(pts)))
-```
 
-To render a triangular mesh as a wireframe instead of a shaded surface, use
-`wireframe3d()`:
-
-```r
+#also try
 wireframe3d(your_morpho_mesh, color = "gray30")
+
 ```
 
 To use BabylonJS light types directly, add one or more scene lights with
@@ -170,12 +151,14 @@ mesh <- as_babylon_mesh(
 babylon(data = list(mesh))
 ```
 
+## New gltf/glb stuff, very rough!
+
 Imported assets can also stay file-backed instead of being flattened into
 `mesh3d`. That is the preferred route for `glb`/`gltf` assets with authored
 PBR materials and textures:
 
 ```r
-asset <- import_model3d("your-model.glb")
+asset <- import_model3d("your_model.glb")
 babylon(data = list(asset))
 ```
 
