@@ -8,6 +8,8 @@ babylon(
   data = list(list(type = "sphere", diameter = 2)),
   interaction = NULL,
   scene = NULL,
+  sync_group = NULL,
+  sync_camera = TRUE,
   width = NULL,
   height = NULL,
   elementId = NULL

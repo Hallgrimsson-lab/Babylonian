@@ -181,6 +181,18 @@ state <- edit_scene3d(scene)
 scene <- apply_scene_state(scene, state = state)
 snapshot3d("lights-demo.png", widget = scene)
 
+#multiwindow w sync
+left <- babylon(
+  data = list(as_babylon_mesh(mesh, color = "gray75")),
+  sync_group = "compare"
+)
+
+right <- babylon(
+  data = list(as_babylon_mesh(mesh2, color = "tomato")),
+  sync_group = "compare"
+)
+
+
 # - digitize parity
 # - shader support??
 # - lights

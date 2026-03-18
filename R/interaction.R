@@ -1,0 +1,870 @@
+#' Start an interactive landmark digitizer on a Babylon mesh
+#'
+#' This creates a Babylon widget that captures surface picks using BabylonJS
+#' ray casting. In interactive R sessions, landmarking completes by returning a
+#' three-column coordinate matrix. In non-interactive contexts, the function
+#' returns the underlying widget.
+#'
+#' @param x A `babylon_mesh` object or `mesh3d` object.
+#' @param n Optional target number of landmarks to collect.
+#' @param fixed Optional matrix of fixed landmarks to show on the surface.
+#' @param width Widget width.
+#' @param height Widget height.
+#' @param elementId Optional widget element id.
+#' @param marker_color Landmark marker color.
+#' @param marker_scale Landmark marker diameter as a fraction of mesh radius.
+#'
+#' @export
+digitize_landmarks <- function(
+  x,
+  n = NULL,
+  fixed = NULL,
+  width = NULL,
+  height = NULL,
+  elementId = NULL,
+  marker_color = "#dc2626",
+  marker_scale = 0.015
+) {
+  mesh <- normalize_scene_object(x)
+
+  if (!inherits(mesh, "babylon_mesh")) {
+    stop("`x` must be a `babylon_mesh` or `mesh3d` object.", call. = FALSE)
+  }
+
+  interaction <- list(
+    mode = "digitize_landmarks",
+    n = if (is.null(n)) NULL else as.integer(n),
+    fixed = normalize_landmarks(fixed),
+    marker = list(
+      color = normalize_babylon_color(marker_color),
+      scale = marker_scale
+    )
+  )
+
+  widget <- babylon(
+    data = list(mesh),
+    interaction = interaction,
+    width = width,
+    height = height,
+    elementId = elementId
+  )
+  widget$x$scene$view <- NULL
+
+  if (!interactive()) {
+    return(widget)
+  }
+
+  run_landmark_gadget(widget, n = n)
+}
+
+#' Interactively pose a 3D scene and return its view parameters
+#'
+#' This opens a Shiny gadget with a Babylonian scene, lets you rotate and zoom
+#' the object, and returns the resulting `par3d()`-style view settings when you
+#' finish.
+#'
+#' @param x A supported `plot3d()` object.
+#' @param width Widget width.
+#' @param height Widget height.
+#' @param ... Additional arguments passed to [plot3d()] with `add = FALSE`.
+#'
+#' @export
+create_pose_3d <- function(x, width = NULL, height = NULL, ...) {
+  widget <- do.call(
+    plot3d,
+    c(
+      list(x = x, add = FALSE),
+      list(...)
+    )
+  )
+  widget$x$interaction <- list(mode = "pose_3d")
+  widget$x$scene$view <- NULL
+
+  if (!is.null(width)) {
+    widget$width <- width
+  }
+
+  if (!is.null(height)) {
+    widget$height <- height
+  }
+
+  if (!interactive()) {
+    return(widget)
+  }
+
+  run_pose_gadget(widget)
+}
+
+#' Interactively edit mesh and light transforms in a 3D scene
+#'
+#' This opens a Babylonian scene editor with native BabylonJS gizmos for mesh
+#' and light primitives. The returned scene state captures the camera pose plus
+#' edited mesh transforms and light placement so it can be reused later with
+#' [apply_scene_state()].
+#'
+#' @param x A supported `plot3d()` object or an existing Babylonian htmlwidget.
+#' @param width Widget width.
+#' @param height Widget height.
+#' @param ... Additional arguments passed to [plot3d()] with `add = FALSE` when
+#'   `x` is not already a widget.
+#'
+#' @export
+edit_scene3d <- function(x, width = NULL, height = NULL, ...) {
+  if (inherits(x, "htmlwidget")) {
+    widget <- babylon(
+      data = x$x$objects %||% list(),
+      interaction = x$x$interaction %||% NULL,
+      scene = x$x$scene %||% NULL,
+      width = width %||% x$width,
+      height = height %||% x$height,
+      elementId = NULL
+    )
+  } else {
+    widget <- do.call(
+      plot3d,
+      c(
+        list(x = x, add = FALSE),
+        list(...)
+      )
+    )
+  }
+
+  widget$x$interaction <- list(mode = "edit_scene3d")
+
+  if (!is.null(width)) {
+    widget$width <- width
+  }
+
+  if (!is.null(height)) {
+    widget$height <- height
+  }
+
+  if (!interactive()) {
+    return(widget)
+  }
+
+  run_scene_editor_gadget(widget)
+}
+
+#' Apply a saved scene editor state
+#'
+#' This reapplies a scene state returned by [edit_scene3d()] to a widget or to
+#' the current in-memory Babylonian scene accumulator.
+#'
+#' @param x Optional Babylonian htmlwidget or `plot3d()`-compatible object. If
+#'   omitted, the current accumulated scene is used.
+#' @param state A scene state returned by [edit_scene3d()]. Defaults to the
+#'   most recent value from [last_scene_state()].
+#' @param ... Additional arguments passed to [plot3d()] with `add = FALSE` when
+#'   `x` is not already a widget.
+#'
+#' @export
+apply_scene_state <- function(x = NULL, state = last_scene_state(), ...) {
+  state <- normalize_scene_state(state)
+  if (is.null(state)) {
+    stop("No scene state is available. Run `edit_scene3d()` first or pass `state`.", call. = FALSE)
+  }
+
+  if (is.null(x)) {
+    scene_spec <- current_scene_spec()
+    if (is.null(scene_spec)) {
+      stop("No active Babylonian scene available. Plot a scene first or pass `x`.", call. = FALSE)
+    }
+
+    scene_spec$objects <- apply_scene_state_to_objects(scene_spec$objects, state$objects)
+    scene_spec$scene <- normalize_scene(scene_spec$scene)
+    if (!is.null(state$view)) {
+      scene_spec$scene$view <- normalize_view(state$view)
+      .babylon_state$last_scene_par3d <- deserialize_par3d(scene_spec$scene$view)
+    }
+
+    .babylon_state$current_scene <- scene_spec
+    set_last_scene_state(state)
+    return(babylon(scene_spec$objects, scene = scene_spec$scene))
+  }
+
+  if (inherits(x, "htmlwidget")) {
+    widget <- x
+  } else {
+    widget <- do.call(
+      plot3d,
+      c(
+        list(x = x, add = FALSE),
+        list(...)
+      )
+    )
+  }
+
+  widget$x$objects <- apply_scene_state_to_objects(widget$x$objects, state$objects)
+  widget$x$scene <- normalize_scene(widget$x$scene)
+  if (!is.null(state$view)) {
+    widget$x$scene$view <- normalize_view(state$view)
+  }
+
+  set_last_scene_state(state)
+  widget
+}
+
+#' Return the last captured editable scene state
+#'
+#' @export
+last_scene_state <- function() {
+  .babylon_state$last_scene_state
+}
+
+normalize_landmarks <- function(x) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+
+  if (!is.matrix(x) || ncol(x) != 3) {
+    stop("`fixed` must be a matrix with three columns.", call. = FALSE)
+  }
+
+  unname(x)
+}
+
+set_last_scene_state <- function(x) {
+  .babylon_state$last_scene_state <- normalize_scene_state(x)
+  invisible(.babylon_state$last_scene_state)
+}
+
+current_pose_input <- function(x = NULL, fallback = NULL) {
+  if (!is.null(x) && nzchar(x)) {
+    return(deserialize_par3d(jsonlite::fromJSON(x, simplifyVector = TRUE)))
+  }
+
+  if (!is.null(fallback)) {
+    return(fallback)
+  }
+
+  live <- last_par3d(live = TRUE)
+  if (!is.null(live)) {
+    return(live)
+  }
+
+  last_par3d()
+}
+
+current_scene_state_input <- function(x = NULL, fallback = NULL) {
+  if (!is.null(x) && nzchar(x)) {
+    return(normalize_scene_state(jsonlite::fromJSON(x, simplifyVector = FALSE)))
+  }
+
+  if (!is.null(fallback)) {
+    return(normalize_scene_state(fallback))
+  }
+
+  last_scene_state()
+}
+
+scene_state_from_widget <- function(widget) {
+  objects <- widget$x$objects %||% list()
+  scene <- widget$x$scene %||% list()
+
+  list(
+    view = scene$view %||% serialize_par3d(.babylon_state$par3d),
+    objects = Filter(
+      Negate(is.null),
+      lapply(seq_along(objects), function(i) seed_scene_state_entry(objects[[i]], i))
+    )
+  )
+}
+
+seed_scene_state_entry <- function(object, index) {
+  if (is.null(object$type)) {
+    return(NULL)
+  }
+
+  entry <- list(
+    index = as.integer(index),
+    primitive_type = object$type
+  )
+
+  if (!is.null(object$name)) {
+    entry$name <- as.character(object$name[[1]])
+  }
+
+  if (identical(object$type, "light3d")) {
+    entry$node_type <- "light"
+    entry$light_type <- object$light_type %||% "hemispheric"
+    if (!is.null(object$position)) {
+      entry$position <- normalize_transform_vector(object$position, "position")
+    }
+    if (!is.null(object$direction)) {
+      entry$direction <- normalize_transform_vector(object$direction, "direction")
+    }
+    for (nm in c("intensity", "diffuse", "specular", "ground_color", "angle", "exponent", "range", "enabled")) {
+      if (!is.null(object[[nm]])) {
+        entry[[nm]] <- object[[nm]]
+      }
+    }
+    return(entry)
+  }
+
+  if (object$type %in% editable_mesh_primitive_types()) {
+    entry$node_type <- "mesh"
+    entry$position <- normalize_transform_vector(object$position %||% c(0, 0, 0), "position")
+    entry$rotation <- normalize_transform_vector(object$rotation %||% c(0, 0, 0), "rotation")
+    entry$scaling <- normalize_transform_vector(object$scaling %||% c(1, 1, 1), "scaling")
+    return(entry)
+  }
+
+  NULL
+}
+
+normalize_scene_state <- function(x) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+
+  if (!is.list(x)) {
+    stop("`state` must be a list returned by `edit_scene3d()`.", call. = FALSE)
+  }
+
+  state <- list(
+    view = NULL,
+    objects = list()
+  )
+
+  if (!is.null(x$view)) {
+    state$view <- normalize_view(x$view)
+  }
+
+  objects <- x$objects %||% list()
+  if (is.data.frame(objects)) {
+    objects <- data_frame_rows_to_list(objects)
+  }
+  if (length(objects)) {
+    state$objects <- lapply(objects, normalize_scene_state_entry)
+  }
+
+  for (nm in c("selected", "gizmo_mode", "gizmos_visible")) {
+    if (!is.null(x[[nm]])) {
+      state[[nm]] <- x[[nm]]
+    }
+  }
+
+  state
+}
+
+normalize_scene_state_entry <- function(x) {
+  if (is.data.frame(x)) {
+    x <- data_frame_rows_to_list(x)
+    if (length(x) != 1L) {
+      stop("Each `state$objects` entry must describe exactly one object.", call. = FALSE)
+    }
+    x <- x[[1]]
+  }
+
+  if (!is.list(x)) {
+    stop("Each `state$objects` entry must be a list.", call. = FALSE)
+  }
+
+  entry <- list(
+    index = as.integer(x$index[[1]]),
+    primitive_type = x$primitive_type %||% x$type %||% NULL,
+    node_type = x$node_type %||% NULL
+  )
+
+  if (!is.finite(entry$index) || entry$index < 1L) {
+    stop("Scene state object indices must be positive integers.", call. = FALSE)
+  }
+
+  if (!is.null(x$name)) {
+    entry$name <- as.character(x$name[[1]])
+  }
+
+  for (nm in c("position", "rotation", "scaling", "direction")) {
+    if (!is.null(x[[nm]])) {
+      entry[[nm]] <- normalize_transform_vector(x[[nm]], nm)
+    }
+  }
+
+  if (!is.null(x$light_type)) {
+    entry$light_type <- as.character(x$light_type[[1]])
+  }
+
+  for (nm in c("intensity", "angle", "exponent", "range")) {
+    if (!is.null(x[[nm]])) {
+      entry[[nm]] <- as.numeric(x[[nm]][[1]])
+    }
+  }
+
+  for (nm in c("diffuse", "ground_color")) {
+    if (!is.null(x[[nm]])) {
+      entry[[nm]] <- normalize_babylon_color(x[[nm]])
+    }
+  }
+
+  if (!is.null(x$specular)) {
+    entry$specular <- normalize_babylon_specularity(x$specular)
+  }
+
+  if (!is.null(x$enabled)) {
+    entry$enabled <- isTRUE(x$enabled)
+  }
+
+  entry
+}
+
+data_frame_rows_to_list <- function(x) {
+  if (!is.data.frame(x) || !nrow(x)) {
+    return(list())
+  }
+
+  rows <- vector("list", nrow(x))
+  for (i in seq_len(nrow(x))) {
+    row <- lapply(x, function(column) {
+      value <- column[[i]]
+      if (is.data.frame(value)) {
+        return(data_frame_rows_to_list(value))
+      }
+      value
+    })
+    rows[[i]] <- row
+  }
+  rows
+}
+
+apply_scene_state_to_objects <- function(objects, edits) {
+  if (!length(edits)) {
+    return(objects)
+  }
+
+  edited <- objects
+  for (entry in edits) {
+    idx <- locate_scene_state_object(edited, entry)
+    if (is.na(idx)) {
+      next
+    }
+    edited[[idx]] <- apply_scene_state_entry(edited[[idx]], entry)
+  }
+
+  edited
+}
+
+locate_scene_state_object <- function(objects, entry) {
+  if (!is.null(entry$name)) {
+    matches <- which(vapply(objects, function(object) identical(object$name %||% NULL, entry$name), logical(1)))
+    if (length(matches) == 1L) {
+      return(matches[[1]])
+    }
+  }
+
+  idx <- as.integer(entry$index[[1]])
+  if (is.finite(idx) && idx >= 1L && idx <= length(objects)) {
+    return(idx)
+  }
+
+  NA_integer_
+}
+
+apply_scene_state_entry <- function(object, entry) {
+  if (!is.null(entry$position)) {
+    object$position <- normalize_transform_vector(entry$position, "position")
+  }
+  if (!is.null(entry$rotation)) {
+    object$rotation <- normalize_transform_vector(entry$rotation, "rotation")
+  }
+  if (!is.null(entry$scaling)) {
+    object$scaling <- normalize_transform_vector(entry$scaling, "scaling")
+  }
+  if (!is.null(entry$direction)) {
+    object$direction <- normalize_transform_vector(entry$direction, "direction")
+  }
+
+  for (nm in c("intensity", "angle", "exponent", "range", "enabled", "light_type")) {
+    if (!is.null(entry[[nm]])) {
+      object[[nm]] <- entry[[nm]]
+    }
+  }
+
+  for (nm in c("diffuse", "specular", "ground_color")) {
+    if (!is.null(entry[[nm]])) {
+      object[[nm]] <- entry[[nm]]
+    }
+  }
+
+  object
+}
+
+editable_mesh_primitive_types <- function() {
+  c("sphere", "box", "plane", "cylinder", "cone", "mesh3d", "meshdist3d")
+}
+
+normalize_transform_vector <- function(x, arg) {
+  if (is.list(x)) {
+    x <- unlist(x, recursive = TRUE, use.names = FALSE)
+  }
+
+  if (!is.numeric(x) || length(x) != 3L || !all(is.finite(x))) {
+    stop("`", arg, "` must be a finite numeric vector of length 3.", call. = FALSE)
+  }
+
+  unname(as.numeric(x))
+}
+
+run_landmark_gadget <- function(widget, n = NULL) {
+  if (!requireNamespace("shiny", quietly = TRUE)) {
+    warning("Package 'shiny' is required for interactive landmark collection; returning the widget instead.")
+    return(widget)
+  }
+
+  if (!requireNamespace("miniUI", quietly = TRUE)) {
+    warning("Package 'miniUI' is required for interactive landmark collection; returning the widget instead.")
+    return(widget)
+  }
+
+  if (is.null(widget$elementId) || identical(widget$elementId, "")) {
+    widget$elementId <- paste0("babylon_landmarks_", as.integer(stats::runif(1, 1, 1e9)))
+  }
+
+  ui <- miniUI::miniPage(
+    miniUI::gadgetTitleBar("Digitize Landmarks"),
+    miniUI::miniContentPanel(
+      widget,
+      shiny::div(
+        style = "padding-top: 10px; font-family: monospace;",
+        shiny::textOutput("landmark_status")
+      )
+    )
+  )
+
+  server <- function(input, output, session) {
+    landmark_input <- paste0(widget$elementId, "_landmarks")
+    par3d_input <- paste0(widget$elementId, "_par3d")
+
+    output$landmark_status <- shiny::renderText({
+      pts <- input[[landmark_input]]
+      count <- landmark_count(pts)
+      if (is.null(n)) {
+        paste("Collected", count, "landmarks")
+      } else {
+        paste("Collected", count, "of", n, "landmarks")
+      }
+    })
+
+    shiny::observeEvent(input[[par3d_input]], {
+      value <- input[[par3d_input]]
+      if (!is.null(value) && nzchar(value)) {
+        set_last_live_par3d(jsonlite::fromJSON(value, simplifyVector = TRUE))
+      }
+    }, ignoreNULL = TRUE)
+
+    shiny::observeEvent(input[[landmark_input]], {
+      pts <- input[[landmark_input]]
+      if (!is.null(n) && landmark_count(pts) >= n) {
+        coords <- landmarks_to_matrix(pts)
+        shiny::stopApp(coords)
+      }
+    }, ignoreNULL = TRUE)
+
+    shiny::observeEvent(input$done, {
+      pts <- input[[landmark_input]]
+      if (landmark_count(pts) == 0) {
+        shiny::stopApp(matrix(numeric(0), ncol = 3))
+      }
+
+      shiny::stopApp(landmarks_to_matrix(pts))
+    })
+
+    shiny::observeEvent(input$cancel, {
+      shiny::stopApp(NULL)
+    })
+  }
+
+  viewer <- shiny::dialogViewer(
+    "Digitize Landmarks",
+    width = normalize_viewer_dimension(widget$width, default = 900),
+    height = normalize_viewer_dimension(widget$height, default = 700)
+  )
+  result <- shiny::runGadget(ui, server, viewer = viewer)
+
+  if (is.null(result)) {
+    return(invisible(NULL))
+  }
+
+  result
+}
+
+run_pose_gadget <- function(widget) {
+  if (!requireNamespace("shiny", quietly = TRUE)) {
+    warning("Package 'shiny' is required for interactive pose capture; returning the widget instead.")
+    return(widget)
+  }
+
+  if (!requireNamespace("miniUI", quietly = TRUE)) {
+    warning("Package 'miniUI' is required for interactive pose capture; returning the widget instead.")
+    return(widget)
+  }
+
+  if (is.null(widget$elementId) || identical(widget$elementId, "")) {
+    widget$elementId <- paste0("babylon_pose_", as.integer(stats::runif(1, 1, 1e9)))
+  }
+
+  .babylon_state$last_live_par3d <- NULL
+
+  ui <- miniUI::miniPage(
+    miniUI::gadgetTitleBar("Pose 3D Scene"),
+    miniUI::miniContentPanel(widget)
+  )
+
+  server <- function(input, output, session) {
+    par3d_input <- paste0(widget$elementId, "_par3d")
+    initial_pose <- list(
+      zoom = 0.05,
+      userMatrix = diag(4)
+    )
+
+    shiny::observeEvent(input[[par3d_input]], {
+      value <- input[[par3d_input]]
+      if (!is.null(value) && nzchar(value)) {
+        set_last_live_par3d(jsonlite::fromJSON(value, simplifyVector = TRUE))
+      }
+    }, ignoreNULL = TRUE)
+
+    shiny::observeEvent(input$done, {
+      shiny::stopApp(current_pose_input(input[[par3d_input]], fallback = initial_pose))
+    })
+
+    shiny::observeEvent(input$cancel, {
+      shiny::stopApp(NULL)
+    })
+  }
+
+  viewer <- shiny::dialogViewer(
+    "Pose 3D Scene",
+    width = normalize_viewer_dimension(widget$width, default = 900),
+    height = normalize_viewer_dimension(widget$height, default = 700)
+  )
+  result <- shiny::runGadget(ui, server, viewer = viewer)
+
+  if (is.null(result)) {
+    return(invisible(NULL))
+  }
+
+  par3d(zoom = result$zoom, userMatrix = result$userMatrix)
+}
+
+run_scene_editor_gadget <- function(widget) {
+  if (!requireNamespace("shiny", quietly = TRUE)) {
+    warning("Package 'shiny' is required for interactive scene editing; returning the widget instead.")
+    return(widget)
+  }
+
+  if (!requireNamespace("miniUI", quietly = TRUE)) {
+    warning("Package 'miniUI' is required for interactive scene editing; returning the widget instead.")
+    return(widget)
+  }
+
+  if (is.null(widget$elementId) || identical(widget$elementId, "")) {
+    widget$elementId <- paste0("babylon_scene_editor_", as.integer(stats::runif(1, 1, 1e9)))
+  }
+
+  initial_state <- scene_state_from_widget(widget)
+  set_last_scene_state(initial_state)
+
+  ui <- miniUI::miniPage(
+    miniUI::gadgetTitleBar("Edit 3D Scene"),
+    miniUI::miniContentPanel(widget)
+  )
+
+  server <- function(input, output, session) {
+    scene_state_input <- paste0(widget$elementId, "_scene_state")
+    par3d_input <- paste0(widget$elementId, "_par3d")
+
+    shiny::observeEvent(input[[par3d_input]], {
+      value <- input[[par3d_input]]
+      if (!is.null(value) && nzchar(value)) {
+        set_last_live_par3d(jsonlite::fromJSON(value, simplifyVector = TRUE))
+      }
+    }, ignoreNULL = TRUE)
+
+    shiny::observeEvent(input[[scene_state_input]], {
+      value <- input[[scene_state_input]]
+      if (!is.null(value) && nzchar(value)) {
+        set_last_scene_state(jsonlite::fromJSON(value, simplifyVector = FALSE))
+      }
+    }, ignoreNULL = TRUE)
+
+    shiny::observeEvent(input$done, {
+      state <- current_scene_state_input(input[[scene_state_input]], fallback = initial_state)
+      set_last_scene_state(state)
+      shiny::stopApp(state)
+    })
+
+    shiny::observeEvent(input$cancel, {
+      shiny::stopApp(NULL)
+    })
+  }
+
+  viewer <- shiny::dialogViewer(
+    "Edit 3D Scene",
+    width = normalize_viewer_dimension(widget$width, default = 1100),
+    height = normalize_viewer_dimension(widget$height, default = 800)
+  )
+  result <- shiny::runGadget(ui, server, viewer = viewer)
+
+  if (is.null(result)) {
+    return(invisible(NULL))
+  }
+
+  set_last_scene_state(result)
+  result
+}
+
+normalize_viewer_dimension <- function(x, default) {
+  if (is.null(x)) {
+    return(default)
+  }
+
+  if (is.numeric(x) && length(x) == 1) {
+    return(x)
+  }
+
+  if (is.character(x) && length(x) == 1) {
+    if (grepl("%", x, fixed = TRUE)) {
+      return(default)
+    }
+
+    parsed <- suppressWarnings(as.numeric(gsub("[^0-9.]+", "", x)))
+    if (is.finite(parsed)) {
+      return(parsed)
+    }
+  }
+
+  default
+}
+
+landmark_count <- function(x) {
+  if (is.null(x)) {
+    return(0L)
+  }
+
+  coords <- tryCatch(extract_landmark_matrix(x), error = function(e) NULL)
+  if (!is.null(coords)) {
+    return(nrow(coords))
+  }
+
+  length(x)
+}
+
+landmarks_to_matrix <- function(x) {
+  if (is.null(x) || landmark_count(x) == 0) {
+    return(matrix(numeric(0), ncol = 3))
+  }
+
+  coords <- extract_landmark_matrix(x)
+  if (is.null(coords)) {
+    stop("Could not convert landmark payload into a 3-column matrix.", call. = FALSE)
+  }
+
+  coords
+}
+
+extract_landmark_matrix <- function(x) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+
+  if (is.character(x) && length(x) == 1L) {
+    return(parse_landmark_json(x))
+  }
+
+  if (is.matrix(x)) {
+    return(normalize_landmark_columns(x))
+  }
+
+  if (is.data.frame(x)) {
+    return(normalize_landmark_columns(as.matrix(x)))
+  }
+
+  if (is_coordinate_columns(x)) {
+    return(unname(cbind(x[["x"]], x[["y"]], x[["z"]])))
+  }
+
+  if (is.list(x) && length(x)) {
+    numeric_parts <- x[vapply(x, function(part) {
+      (is.atomic(part) || is.matrix(part) || is.data.frame(part)) && length(part) > 0
+    }, logical(1))]
+
+    for (part in numeric_parts) {
+      candidate <- tryCatch(extract_landmark_matrix(part), error = function(e) NULL)
+      if (!is.null(candidate)) {
+        return(candidate)
+      }
+    }
+
+    rowwise <- tryCatch(
+      unname(do.call(rbind, lapply(x, function(row) unlist(row, use.names = FALSE)))),
+      error = function(e) NULL
+    )
+    rowwise <- normalize_landmark_columns(rowwise)
+    if (!is.null(rowwise)) {
+      return(rowwise)
+    }
+  }
+
+  NULL
+}
+
+parse_landmark_json <- function(x) {
+  if (!nzchar(x)) {
+    return(matrix(numeric(0), ncol = 3))
+  }
+
+  if (!requireNamespace("jsonlite", quietly = TRUE)) {
+    stop("Package 'jsonlite' is required to parse landmark data.", call. = FALSE)
+  }
+
+  parsed <- jsonlite::fromJSON(x, simplifyVector = TRUE)
+  normalize_landmark_columns(parsed)
+}
+
+normalize_landmark_columns <- function(x) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+
+  if (is.vector(x) && !is.list(x)) {
+    if (length(x) %% 3L != 0L) {
+      return(NULL)
+    }
+    x <- matrix(x, ncol = 3, byrow = TRUE)
+  }
+
+  if (is.null(dim(x))) {
+    return(NULL)
+  }
+
+  x <- unname(x)
+  storage.mode(x) <- "numeric"
+
+  if (ncol(x) == 3L) {
+    return(x)
+  }
+
+  if (!is.null(colnames(x))) {
+    xyz <- match(c("x", "y", "z"), tolower(colnames(x)))
+    if (all(!is.na(xyz))) {
+      return(unname(x[, xyz, drop = FALSE]))
+    }
+  }
+
+  if (ncol(x) > 3L) {
+    numeric_cols <- which(vapply(seq_len(ncol(x)), function(i) all(is.finite(x[, i]) | is.na(x[, i])), logical(1)))
+    if (length(numeric_cols) >= 3L) {
+      return(x[, numeric_cols[seq_len(3)], drop = FALSE])
+    }
+  }
+
+  NULL
+}
+
+is_coordinate_columns <- function(x) {
+  is.list(x) &&
+    all(c("x", "y", "z") %in% names(x)) &&
+    all(vapply(x[c("x", "y", "z")], function(col) is.atomic(col) && is.null(dim(col)), logical(1))) &&
+    length(unique(vapply(x[c("x", "y", "z")], length, integer(1)))) == 1L
+}

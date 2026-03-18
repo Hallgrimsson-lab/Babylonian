@@ -96,6 +96,10 @@ HTMLWidgets.widget({
     var baseCameraState = null;
     var activeInteractionState = null;
     var publishViewStateHandle = null;
+    var widgetInstanceId = "babylon-" + Math.random().toString(36).slice(2);
+    var currentSyncConfig = null;
+    var applyingSyncedView = false;
+    var pendingSyncedView = null;
 
     function clamp01(x) {
       if (!isFinite(x)) {
@@ -140,6 +144,83 @@ HTMLWidgets.widget({
       defaultLights.forEach(function(light) {
         light.setEnabled(!!enabled);
       });
+    }
+
+    function globalObject() {
+      if (typeof globalThis !== "undefined") {
+        return globalThis;
+      }
+      if (typeof window !== "undefined") {
+        return window;
+      }
+      return {};
+    }
+
+    function getSyncHub() {
+      var root = globalObject();
+      if (!root.__babylonianSyncHub) {
+        root.__babylonianSyncHub = {groups: {}};
+      }
+      return root.__babylonianSyncHub;
+    }
+
+    function unregisterSyncGroup() {
+      if (!currentSyncConfig || !currentSyncConfig.group) {
+        currentSyncConfig = null;
+        return;
+      }
+
+      var hub = getSyncHub();
+      var group = hub.groups[currentSyncConfig.group];
+      if (group && group.members) {
+        delete group.members[widgetInstanceId];
+        if (!Object.keys(group.members).length) {
+          delete hub.groups[currentSyncConfig.group];
+        }
+      }
+      currentSyncConfig = null;
+    }
+
+    function registerSyncGroup(syncConfig) {
+      unregisterSyncGroup();
+
+      if (!syncConfig || !syncConfig.group || syncConfig.camera === false) {
+        return;
+      }
+
+      var hub = getSyncHub();
+      if (!hub.groups[syncConfig.group]) {
+        hub.groups[syncConfig.group] = {members: {}};
+      }
+
+      currentSyncConfig = {
+        group: syncConfig.group,
+        camera: syncConfig.camera !== false
+      };
+
+      hub.groups[syncConfig.group].members[widgetInstanceId] = {
+        applyView: function(view) {
+          if (!view) {
+            return;
+          }
+
+          if (!currentSceneOptions) {
+            currentSceneOptions = {};
+          }
+          currentSceneOptions.view = view;
+
+          if (!currentSceneBounds || !baseCameraState) {
+            pendingSyncedView = view;
+            return;
+          }
+
+          applyingSyncedView = true;
+          applyViewOptions(currentSceneBounds, currentSceneOptions);
+          window.setTimeout(function() {
+            applyingSyncedView = false;
+          }, 0);
+        }
+      };
     }
 
     function pushShinyInputValue(id, value) {
@@ -801,6 +882,33 @@ HTMLWidgets.widget({
       camera.radius = radius;
     }
 
+    function publishSyncedViewState() {
+      if (!currentSyncConfig || !currentSyncConfig.group || applyingSyncedView) {
+        return;
+      }
+
+      var payload = currentPar3dState();
+      if (!payload) {
+        return;
+      }
+
+      var hub = getSyncHub();
+      var group = hub.groups[currentSyncConfig.group];
+      if (!group || !group.members) {
+        return;
+      }
+
+      Object.keys(group.members).forEach(function(memberId) {
+        if (memberId === widgetInstanceId) {
+          return;
+        }
+        var member = group.members[memberId];
+        if (member && typeof member.applyView === "function") {
+          member.applyView(payload);
+        }
+      });
+    }
+
     function updatePosePanel(state, payload) {
       if (!state || state.mode !== "pose_3d" || !payload) {
         clearUiPanel();
@@ -1113,7 +1221,7 @@ HTMLWidgets.widget({
     }
 
     function schedulePoseStatePublish() {
-      if (!activeInteractionState || activeInteractionState.mode !== "pose_3d") {
+      if ((!activeInteractionState || activeInteractionState.mode !== "pose_3d") && !currentSyncConfig) {
         return;
       }
 
@@ -1123,7 +1231,10 @@ HTMLWidgets.widget({
 
       publishViewStateHandle = window.requestAnimationFrame(function() {
         publishViewStateHandle = null;
-        publishPoseState(activeInteractionState);
+        if (activeInteractionState && activeInteractionState.mode === "pose_3d") {
+          publishPoseState(activeInteractionState);
+        }
+        publishSyncedViewState();
       });
     }
 
@@ -1327,6 +1438,19 @@ HTMLWidgets.widget({
         offset: camera.position.subtract(center),
         up: camera.upVector.clone()
       };
+
+      if (pendingSyncedView) {
+        if (!currentSceneOptions) {
+          currentSceneOptions = {};
+        }
+        currentSceneOptions.view = pendingSyncedView;
+        applyingSyncedView = true;
+        applyViewOptions(currentSceneBounds, currentSceneOptions);
+        pendingSyncedView = null;
+        window.setTimeout(function() {
+          applyingSyncedView = false;
+        }, 0);
+      }
     }
 
     function clearSceneDecorations() {
@@ -1678,6 +1802,7 @@ HTMLWidgets.widget({
         var primaryMesh = null;
 
         clearManagedScene();
+        registerSyncGroup(currentSceneOptions && currentSceneOptions.sync ? currentSceneOptions.sync : null);
 
         function scheduleFrame() {
           sceneUpdated = true;

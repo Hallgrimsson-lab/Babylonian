@@ -31,6 +31,34 @@ babylon(
 
 This will create a 3D scene in the RStudio viewer or in a web browser. You can interact with the scene using the mouse.
 
+To keep multiple Babylonian widgets side by side with synchronized camera
+motion, give them the same `sync_group`:
+
+```r
+left <- babylon(
+  data = list(as_babylon_mesh(your_morpho_mesh, color = "gray75")),
+  sync_group = "compare"
+)
+
+right <- babylon(
+  data = list(wireframe3d(your_morpho_mesh, add = FALSE, axes = FALSE)$x$objects[[1]]),
+  sync_group = "compare"
+)
+```
+
+When both widgets appear on the same page, orbiting or zooming one will update
+the other to the same view.
+
+For a quick side-by-side layout, use `paired_scene3d()`:
+
+```r
+paired_scene3d(
+  as_babylon_mesh(mesh, color = "gray75"),
+  as_babylon_mesh(mesh2, color = "tomato"),
+  labels = c("Reference", "Target")
+)
+```
+
 `Babylonian` can also render in-memory triangular meshes that use R's `mesh3d`
 structure. That makes it possible to take meshes returned by Morpho and send
 them directly to the widget:

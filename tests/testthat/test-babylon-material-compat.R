@@ -67,6 +67,42 @@ testthat::test_that("scene object normalization applies compatibility layer", {
   testthat::expect_equal(obj$specularity, c(0.25, 0.25, 0.25))
 })
 
+testthat::test_that("babylon stores normalized sync group settings", {
+  widget <- babylon(
+    data = list(list(type = "sphere", diameter = 1)),
+    sync_group = "linked-view"
+  )
+
+  testthat::expect_identical(widget$x$scene$sync$group, "linked-view")
+  testthat::expect_true(isTRUE(widget$x$scene$sync$camera))
+})
+
+testthat::test_that("paired_scene3d applies a shared sync group to both panels", {
+  left <- babylon(data = list(list(type = "sphere", diameter = 1)))
+  right <- babylon(data = list(list(type = "box", size = 1)))
+
+  paired <- paired_scene3d(left, right, sync_group = "paired-test", labels = c("Left", "Right"))
+
+  left_widget <- paired$children[[1]]$children[[2]]
+  right_widget <- paired$children[[2]]$children[[2]]
+
+  testthat::expect_s3_class(left_widget, "htmlwidget")
+  testthat::expect_s3_class(right_widget, "htmlwidget")
+  testthat::expect_identical(left_widget$x$scene$sync$group, "paired-test")
+  testthat::expect_identical(right_widget$x$scene$sync$group, "paired-test")
+})
+
+testthat::test_that("paired_scene3d validates panel labels", {
+  testthat::expect_error(
+    paired_scene3d(
+      babylon(data = list(list(type = "sphere", diameter = 1))),
+      babylon(data = list(list(type = "box", size = 1))),
+      labels = "Only one"
+    ),
+    "`labels` must be NULL or a character vector of length 2."
+  )
+})
+
 testthat::test_that("mesh argument mutation applies compatibility layer", {
   mesh <- structure(list(type = "mesh3d"), class = c("babylon_mesh", "list"))
   out <- modify_babylon_mesh(mesh, list(color = c(10, 20, 30), specularity = 0.5))
