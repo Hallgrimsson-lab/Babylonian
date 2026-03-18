@@ -83,17 +83,20 @@ Babylonian::meshDist(
 heatmap_scale(mesh, mesh2)
 
 heatmap_scale(
-  reference_mesh,
-  distvec = your_distvec,
+  mesh,
+  distvec = runif(ncol(mesh$vb), -100, 100),
   colorramp = c("navy", "white", "firebrick"),
   from = -2,
   to = 2
 )
 
 # - digitize parity
-# - heatmap/meshdist/wireframe
 # - shader support??
 # - lights
 # - multiwindow
 # - movies
 # - gizmo support on lights and meshes
+
+#done
+# - heatmap/meshdist/wireframe
+

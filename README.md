@@ -112,6 +112,19 @@ To render a triangular mesh as a wireframe instead of a shaded surface, use
 wireframe3d(your_morpho_mesh, color = "gray30")
 ```
 
+To use BabylonJS light types directly, add one or more scene lights with
+`light3d()` or the dedicated wrappers:
+
+```r
+plot3d(your_morpho_mesh, color = "gray75", specularity = 0.3)
+light3d_hemispheric(intensity = 0.35, ground_color = "gray20")
+light3d_directional(
+  direction = c(-0.5, -1, 0.2),
+  intensity = 0.9,
+  diffuse = "#fff7cc"
+)
+```
+
 To compare two matching-topology meshes, `meshDist()` colors the reference
 mesh by vertex displacement and can overlay a displaced wireframe plus colored
 displacement segments:

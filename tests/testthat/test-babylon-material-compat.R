@@ -104,6 +104,69 @@ testthat::test_that("wireframe3d marks meshes for wireframe rendering", {
   testthat::expect_true(isTRUE(widget$x$objects[[1]]$wireframe))
 })
 
+testthat::test_that("light3d builds Babylon light primitives", {
+  widget <- light3d(
+    type = "spot",
+    position = c(1, 2, 3),
+    direction = c(0, -1, 0),
+    intensity = 0.75,
+    diffuse = "red",
+    specular = c(0, 128, 255),
+    angle = pi / 4,
+    exponent = 2,
+    range = 10,
+    name = "key",
+    add = FALSE,
+    axes = FALSE
+  )
+
+  light <- widget$x$objects[[1]]
+
+  testthat::expect_identical(light$type, "light3d")
+  testthat::expect_identical(light$light_type, "spot")
+  testthat::expect_equal(light$position, c(1, 2, 3))
+  testthat::expect_equal(light$direction, c(0, -1, 0))
+  testthat::expect_equal(light$intensity, 0.75)
+  testthat::expect_identical(light$diffuse, "#FF0000")
+  testthat::expect_equal(light$specular, c(0, 128, 255) / 255)
+  testthat::expect_equal(light$angle, pi / 4)
+  testthat::expect_equal(light$exponent, 2)
+  testthat::expect_equal(light$range, 10)
+  testthat::expect_identical(light$name, "key")
+})
+
+testthat::test_that("light3d wrappers set the expected Babylon light types", {
+  point <- light3d_point(position = c(1, 1, 1), add = FALSE, axes = FALSE)
+  directional <- light3d_directional(direction = c(1, -1, 0), add = FALSE, axes = FALSE)
+  hemispheric <- light3d_hemispheric(ground_color = "gray40", add = FALSE, axes = FALSE)
+
+  testthat::expect_identical(point$x$objects[[1]]$light_type, "point")
+  testthat::expect_equal(point$x$objects[[1]]$position, c(1, 1, 1))
+
+  testthat::expect_identical(directional$x$objects[[1]]$light_type, "directional")
+  testthat::expect_equal(directional$x$objects[[1]]$direction, c(1, -1, 0))
+
+  testthat::expect_identical(hemispheric$x$objects[[1]]$light_type, "hemispheric")
+  testthat::expect_identical(hemispheric$x$objects[[1]]$ground_color, "#666666")
+})
+
+testthat::test_that("light3d validates light arguments", {
+  testthat::expect_error(
+    light3d(type = "laser", add = FALSE, axes = FALSE),
+    "'arg' should be one of"
+  )
+
+  testthat::expect_error(
+    light3d(type = "point", position = c(1, 2), add = FALSE, axes = FALSE),
+    "`position` must be a finite numeric vector of length 3."
+  )
+
+  testthat::expect_error(
+    light3d(type = "spot", angle = -1, add = FALSE, axes = FALSE),
+    "`angle` must be a finite numeric scalar greater than or equal to 0."
+  )
+})
+
 make_test_mesh3d <- function(vertices, faces = matrix(c(1, 2, 3), nrow = 3)) {
   structure(
     list(

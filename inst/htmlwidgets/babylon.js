@@ -35,12 +35,20 @@ HTMLWidgets.widget({
     camera.wheelDeltaPercentage = 0.08;
     camera.attachControl(canvas, true);
 
-    // Create a light
-    var light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
-    light.intensity = 0.9;
-    var fillLight = new BABYLON.HemisphericLight("fill", new BABYLON.Vector3(0, -1, -0.5), scene);
-    fillLight.intensity = 0.35;
+    function createDefaultLights() {
+      var keyLight = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
+      keyLight.intensity = 0.9;
+      var fillLight = new BABYLON.HemisphericLight("fill", new BABYLON.Vector3(0, -1, -0.5), scene);
+      fillLight.intensity = 0.35;
+      return [keyLight, fillLight];
+    }
+
+    var defaultLights = createDefaultLights();
     var digitizeObserver = null;
+    var managedNodes = [];
+    var managedMaterials = [];
+    var managedTextures = [];
+    var managedLights = [];
 
     var uiLayer = document.createElement("div");
     uiLayer.style.position = "absolute";
@@ -96,6 +104,44 @@ HTMLWidgets.widget({
       return Math.min(1, Math.max(0, x));
     }
 
+    function registerDisposable(collection, value) {
+      if (value && collection.indexOf(value) === -1) {
+        collection.push(value);
+      }
+      return value;
+    }
+
+    function registerNode(node) {
+      return registerDisposable(managedNodes, node);
+    }
+
+    function registerMaterial(material) {
+      return registerDisposable(managedMaterials, material);
+    }
+
+    function registerTexture(texture) {
+      return registerDisposable(managedTextures, texture);
+    }
+
+    function registerLight(light) {
+      return registerDisposable(managedLights, light);
+    }
+
+    function disposeCollection(collection) {
+      while (collection.length) {
+        var value = collection.pop();
+        if (value && value.dispose) {
+          value.dispose();
+        }
+      }
+    }
+
+    function setDefaultLightsEnabled(enabled) {
+      defaultLights.forEach(function(light) {
+        light.setEnabled(!!enabled);
+      });
+    }
+
     function isHexColor(value) {
       return typeof value === "string" && /^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(value);
     }
@@ -141,6 +187,22 @@ HTMLWidgets.widget({
       }
 
       return new BABYLON.Color4(color3.r, color3.g, color3.b, a);
+    }
+
+    function coerceVector3(value, fallback) {
+      if (value instanceof BABYLON.Vector3) {
+        return value.clone();
+      }
+
+      if (Array.isArray(value) && value.length >= 3) {
+        return new BABYLON.Vector3(
+          Number(value[0]) || 0,
+          Number(value[1]) || 0,
+          Number(value[2]) || 0
+        );
+      }
+
+      return fallback ? fallback.clone() : new BABYLON.Vector3(0, 0, 0);
     }
 
     if (!BABYLON.Effect.ShadersStore["comparisonHeatmapVertexShader"]) {
@@ -210,7 +272,7 @@ HTMLWidgets.widget({
         return;
       }
 
-      var material = new BABYLON.StandardMaterial(mesh.name + "-material", scene);
+      var material = registerMaterial(new BABYLON.StandardMaterial(mesh.name + "-material", scene));
       material.backFaceCulling = true;
 
       if (primitive.vertex_colors) {
@@ -246,7 +308,7 @@ HTMLWidgets.widget({
     }
 
     function createMeshDistMesh(primitive, name) {
-      var babylonMesh = new BABYLON.Mesh(primitive.name || name, scene);
+      var babylonMesh = registerNode(new BABYLON.Mesh(primitive.name || name, scene));
       var vertexData = new BABYLON.VertexData();
       var normals = [];
       var shaderMaterial;
@@ -266,7 +328,7 @@ HTMLWidgets.widget({
         new BABYLON.VertexBuffer(engine, primitive.reference_normals, "referenceNormal", false, false, 3)
       );
 
-      shaderMaterial = new BABYLON.ShaderMaterial(
+      shaderMaterial = registerMaterial(new BABYLON.ShaderMaterial(
         (primitive.name || name) + "-heatmap-material",
         scene,
         {vertex: "comparisonHeatmap", fragment: "comparisonHeatmap"},
@@ -275,7 +337,7 @@ HTMLWidgets.widget({
           uniforms: ["worldViewProjection", "diffMin", "diffMax", "alpha"],
           samplers: ["colorRamp"]
         }
-      );
+      ));
 
       rampTexture = createHeatmapRampTexture((primitive.name || name) + "-ramp", colorramp);
       shaderMaterial.backFaceCulling = false;
@@ -295,7 +357,7 @@ HTMLWidgets.widget({
     }
 
     function createHeatmapRampTexture(name, colorramp) {
-      var texture = new BABYLON.DynamicTexture(name, {width: 256, height: 1}, scene, false);
+      var texture = registerTexture(new BABYLON.DynamicTexture(name, {width: 256, height: 1}, scene, false));
       var ctx = texture.getContext();
       var gradient = ctx.createLinearGradient(0, 0, 256, 0);
       var stops = colorramp && colorramp.length ? colorramp : ["#0000FF", "#FFFFFF", "#FF0000"];
@@ -314,11 +376,11 @@ HTMLWidgets.widget({
     }
 
     function createMarker(position, color, size, name, isPickable) {
-      var marker = BABYLON.MeshBuilder.CreateSphere(name, {diameter: size}, scene);
+      var marker = registerNode(BABYLON.MeshBuilder.CreateSphere(name, {diameter: size}, scene));
       marker.position = position.clone();
       marker.isPickable = !!isPickable;
 
-      var material = new BABYLON.StandardMaterial(name + "-material", scene);
+      var material = registerMaterial(new BABYLON.StandardMaterial(name + "-material", scene));
       material.diffuseColor = coerceColor3(color, BABYLON.Color3.FromHexString("#dc2626"));
       material.emissiveColor = material.diffuseColor.scale(0.3);
       material.backFaceCulling = true;
@@ -328,12 +390,12 @@ HTMLWidgets.widget({
     }
 
     function createPointBillboard(position, color, alpha, size, name) {
-      var plane = BABYLON.MeshBuilder.CreatePlane(name, {size: size}, scene);
+      var plane = registerNode(BABYLON.MeshBuilder.CreatePlane(name, {size: size}, scene));
       plane.position = position.clone();
       plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
       plane.isPickable = false;
 
-      var material = new BABYLON.StandardMaterial(name + "-material", scene);
+      var material = registerMaterial(new BABYLON.StandardMaterial(name + "-material", scene));
       material.diffuseColor = coerceColor3(color, BABYLON.Color3.FromHexString("#111111"));
       material.emissiveColor = material.diffuseColor.scale(0.6);
       material.specularColor = new BABYLON.Color3(0, 0, 0);
@@ -448,6 +510,16 @@ HTMLWidgets.widget({
     function clearHeatmapLegend() {
       legendLayer.style.display = "none";
       legendLayer.innerHTML = "";
+    }
+
+    function clearManagedScene() {
+      initializeInteraction(null, null);
+      clearSceneDecorations();
+      clearHeatmapLegend();
+      disposeCollection(managedNodes);
+      disposeCollection(managedLights);
+      disposeCollection(managedMaterials);
+      disposeCollection(managedTextures);
     }
 
     function formatRNumber(x) {
@@ -918,7 +990,7 @@ HTMLWidgets.widget({
         colors.push([segmentColor, segmentColor]);
       }
 
-      var lineSystem = BABYLON.MeshBuilder.CreateLineSystem(
+      var lineSystem = registerNode(BABYLON.MeshBuilder.CreateLineSystem(
         name,
         {
           lines: lines,
@@ -926,9 +998,73 @@ HTMLWidgets.widget({
           updatable: false
         },
         scene
-      );
+      ));
       lineSystem.isPickable = false;
       return lineSystem;
+    }
+
+    function createLight(primitive, name) {
+      var lightType = primitive.light_type || primitive.kind || primitive.subtype || "hemispheric";
+      var lightName = primitive.name || name;
+      var position = coerceVector3(primitive.position, new BABYLON.Vector3(0, 1, 0));
+      var direction = coerceVector3(
+        primitive.direction,
+        lightType === "hemispheric" ? new BABYLON.Vector3(0, 1, 0) : new BABYLON.Vector3(0, -1, 0)
+      );
+      var light = null;
+
+      if (lightType === "point") {
+        light = new BABYLON.PointLight(lightName, position, scene);
+      } else if (lightType === "directional") {
+        light = new BABYLON.DirectionalLight(lightName, direction, scene);
+        if (primitive.position) {
+          light.position = position;
+        }
+      } else if (lightType === "spot") {
+        light = new BABYLON.SpotLight(
+          lightName,
+          position,
+          direction,
+          primitive.angle === undefined ? Math.PI / 3 : Number(primitive.angle),
+          primitive.exponent === undefined ? 1 : Number(primitive.exponent),
+          scene
+        );
+      } else {
+        light = new BABYLON.HemisphericLight(lightName, direction, scene);
+      }
+
+      registerLight(light);
+
+      if (primitive.intensity !== undefined) {
+        light.intensity = Number(primitive.intensity);
+      }
+      if (primitive.diffuse !== undefined) {
+        light.diffuse = coerceColor3(primitive.diffuse, light.diffuse);
+      }
+      if (primitive.specular !== undefined) {
+        light.specular = coerceColor3(primitive.specular, light.specular);
+      }
+      if (primitive.range !== undefined && isFinite(Number(primitive.range))) {
+        light.range = Number(primitive.range);
+      }
+      if (primitive.ground_color !== undefined && lightType === "hemispheric") {
+        light.groundColor = coerceColor3(primitive.ground_color, light.groundColor);
+      }
+      if (primitive.position && light.position) {
+        light.position = position;
+      }
+      if (primitive.direction && light.direction) {
+        light.direction = direction;
+      }
+      if (primitive.angle !== undefined && lightType === "spot") {
+        light.angle = Number(primitive.angle);
+      }
+      if (primitive.exponent !== undefined && lightType === "spot") {
+        light.exponent = Number(primitive.exponent);
+      }
+
+      light.setEnabled(primitive.enabled !== false);
+      return light;
     }
 
     function alignPlaneToNormal(mesh, normal) {
@@ -969,7 +1105,7 @@ HTMLWidgets.widget({
         planeSize = currentSceneBounds && currentSceneBounds.radius ? currentSceneBounds.radius * 4 : 2;
       }
 
-      var plane = BABYLON.MeshBuilder.CreatePlane(name, {size: planeSize}, scene);
+      var plane = registerNode(BABYLON.MeshBuilder.CreatePlane(name, {size: planeSize}, scene));
       var center = normal.scale(-d / normalLengthSq);
       plane.position = center;
       alignPlaneToNormal(plane, normal);
@@ -1119,10 +1255,13 @@ HTMLWidgets.widget({
         var interaction = payload.interaction || null;
         currentSceneOptions = payload.scene || null;
         var heatmapLegendPrimitive = null;
+        var hasCustomLights = false;
 
         var pendingImports = 0;
         var sceneUpdated = false;
         var primaryMesh = null;
+
+        clearManagedScene();
 
         function scheduleFrame() {
           sceneUpdated = true;
@@ -1135,45 +1274,51 @@ HTMLWidgets.widget({
         }
 
         objects.forEach(function(primitive) {
+          if (primitive.type === "light3d") {
+            hasCustomLights = true;
+          }
           if (!heatmapLegendPrimitive && primitive.type === "meshdist3d") {
             heatmapLegendPrimitive = primitive;
           }
         });
+        setDefaultLightsEnabled(!hasCustomLights);
         updateHeatmapLegend(heatmapLegendPrimitive);
 
         objects.forEach(function(primitive, i) {
           var name = primitive.type + i;
-          if (primitive.type === "sphere") {
-            var sphere = BABYLON.MeshBuilder.CreateSphere(name, {diameter: primitive.diameter}, scene);
+          if (primitive.type === "light3d") {
+            createLight(primitive, name);
+          } else if (primitive.type === "sphere") {
+            var sphere = registerNode(BABYLON.MeshBuilder.CreateSphere(name, {diameter: primitive.diameter}, scene));
             applyTransform(sphere, primitive);
             applyMaterial(sphere, primitive);
             scheduleFrame();
           } else if (primitive.type === "box") {
-            var box = BABYLON.MeshBuilder.CreateBox(name, {size: primitive.size}, scene);
+            var box = registerNode(BABYLON.MeshBuilder.CreateBox(name, {size: primitive.size}, scene));
             applyTransform(box, primitive);
             applyMaterial(box, primitive);
             scheduleFrame();
           } else if (primitive.type === "plane") {
-            var plane = BABYLON.MeshBuilder.CreatePlane(name, {width: primitive.width, height: primitive.height}, scene);
+            var plane = registerNode(BABYLON.MeshBuilder.CreatePlane(name, {width: primitive.width, height: primitive.height}, scene));
             applyTransform(plane, primitive);
             applyMaterial(plane, primitive);
             scheduleFrame();
           } else if (primitive.type === "cylinder") {
-            var cylinder = BABYLON.MeshBuilder.CreateCylinder(name, {diameter: primitive.diameter, height: primitive.height}, scene);
+            var cylinder = registerNode(BABYLON.MeshBuilder.CreateCylinder(name, {diameter: primitive.diameter, height: primitive.height}, scene));
             applyTransform(cylinder, primitive);
             applyMaterial(cylinder, primitive);
             scheduleFrame();
           } else if (primitive.type === "cone") {
-            var cone = BABYLON.MeshBuilder.CreateCylinder(name, {
+            var cone = registerNode(BABYLON.MeshBuilder.CreateCylinder(name, {
               diameterTop: 0,
               diameterBottom: primitive.diameter,
               height: primitive.height
-            }, scene);
+            }, scene));
             applyTransform(cone, primitive);
             applyMaterial(cone, primitive);
             scheduleFrame();
           } else if (primitive.type === "mesh3d") {
-            var babylonMesh = new BABYLON.Mesh(primitive.name || name, scene);
+            var babylonMesh = registerNode(new BABYLON.Mesh(primitive.name || name, scene));
             var vertexData = new BABYLON.VertexData();
             var normals = [];
 
@@ -1225,12 +1370,12 @@ HTMLWidgets.widget({
               var sphereColor = pointColorAt(primitive.color, idx, "#666666");
               if (!templates[sphereColor]) {
                 var templatePrimitive = Object.assign({}, primitive, {color: sphereColor});
-                var template = BABYLON.MeshBuilder.CreateSphere(name + "-template-" + Object.keys(templates).length, {diameter: scatterRadius * 2}, scene);
+                var template = registerNode(BABYLON.MeshBuilder.CreateSphere(name + "-template-" + Object.keys(templates).length, {diameter: scatterRadius * 2}, scene));
                 template.isVisible = false;
                 applyMaterial(template, templatePrimitive);
                 templates[sphereColor] = template;
               }
-              var instance = templates[sphereColor].createInstance(name + "-sphere-" + idx);
+              var instance = registerNode(templates[sphereColor].createInstance(name + "-sphere-" + idx));
               instance.position = new BABYLON.Vector3(coords[0], coords[1], coords[2]);
               instance.isPickable = false;
             });
@@ -1244,6 +1389,7 @@ HTMLWidgets.widget({
             pendingImports += 1;
             BABYLON.SceneLoader.ImportMesh("", "", primitive.file, scene, function (newMeshes) {
               newMeshes.forEach(function(mesh) {
+                registerNode(mesh);
                 applyTransform(mesh, primitive);
                 applyMaterial(mesh, primitive);
                 if (!primaryMesh && mesh.getTotalVertices && mesh.getTotalVertices() > 0) {
