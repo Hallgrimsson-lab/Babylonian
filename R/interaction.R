@@ -490,7 +490,7 @@ apply_scene_state_entry <- function(object, entry) {
 }
 
 editable_mesh_primitive_types <- function() {
-  c("sphere", "box", "plane", "cylinder", "cone", "mesh3d", "meshdist3d")
+  c("sphere", "box", "plane", "cylinder", "cone", "mesh3d")
 }
 
 normalize_transform_vector <- function(x, arg) {

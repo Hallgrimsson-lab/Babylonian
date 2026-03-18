@@ -44,6 +44,8 @@ as_babylon_mesh <- function(
   color = NULL,
   alpha = NULL,
   specularity = "black",
+  material = NULL,
+  vertex_attributes = NULL,
   reverse_winding = TRUE,
   ...
 ) {
@@ -75,6 +77,14 @@ as_babylon_mesh <- function(
 
   if (!is.null(specularity)) {
     mesh$specularity <- normalize_babylon_specularity(specularity)
+  }
+
+  if (!is.null(material)) {
+    mesh$material <- normalize_material3d(material)
+  }
+
+  if (!is.null(vertex_attributes)) {
+    mesh$vertex_attributes <- normalize_vertex_attributes(vertex_attributes)
   }
 
   structure(mesh, class = c("babylon_mesh", "list"))

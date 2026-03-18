@@ -54,6 +54,75 @@ testthat::test_that("vector and color specularity normalize correctly", {
   testthat::expect_equal(hex_spec, rep(102 / 255, 3))
 })
 
+testthat::test_that("advanced material constructors build normalized descriptors", {
+  standard <- standard_material3d(diffuse = "red", specular = c(0.2, 0.3, 0.4), alpha = 0.5)
+  pbr <- pbr_material3d(base_color = "#123456", metallic = 0.2, roughness = 0.8, unlit = TRUE)
+  shader <- shader_material3d(
+    name = "demo",
+    vertex = "void main(void) { gl_Position = vec4(position, 1.0); }",
+    fragment = "void main(void) { gl_FragColor = vec4(1.0); }",
+    uniforms = list(scale = 2, tint = list(type = "color3", value = c(1, 0, 0)))
+  )
+
+  testthat::expect_s3_class(standard, "babylon_material")
+  testthat::expect_identical(standard$type, "standard")
+  testthat::expect_identical(standard$diffuse, "#FF0000")
+  testthat::expect_equal(standard$specular, c(0.2, 0.3, 0.4))
+  testthat::expect_equal(standard$alpha, 0.5)
+
+  testthat::expect_s3_class(pbr, "babylon_material")
+  testthat::expect_identical(pbr$type, "pbr")
+  testthat::expect_identical(pbr$base_color, "#123456")
+  testthat::expect_equal(pbr$metallic, 0.2)
+  testthat::expect_equal(pbr$roughness, 0.8)
+  testthat::expect_true(isTRUE(pbr$unlit))
+
+  testthat::expect_s3_class(shader, "babylon_material")
+  testthat::expect_identical(shader$type, "shader")
+  testthat::expect_identical(shader$name, "demo")
+  testthat::expect_true("position" %in% shader$attributes)
+  testthat::expect_equal(shader$uniforms$scale, 2)
+})
+
+testthat::test_that("node materials load from packaged JSON exports", {
+  file <- system.file("extdata", "nodeMaterial-demo.json", package = "Babylonian")
+  if (!nzchar(file)) {
+    file <- normalizePath(file.path("..", "..", "inst", "extdata", "nodeMaterial-demo.json"), winslash = "/", mustWork = TRUE)
+  }
+
+  material <- node_material3d(file = file, params = list("Surface Color" = list(type = "color3", value = c(0.1, 0.2, 0.3))))
+
+  testthat::expect_s3_class(material, "babylon_material")
+  testthat::expect_identical(material$type, "node")
+  testthat::expect_true(is.list(material$source))
+  testthat::expect_identical(material$params[["Surface Color"]]$type, "color3")
+})
+
+testthat::test_that("meshes can carry advanced materials and custom vertex attributes", {
+  mesh3d_obj <- structure(
+    list(
+      vb = rbind(
+        c(0, 1, 0),
+        c(0, 0, 1),
+        c(0, 0, 0),
+        c(1, 1, 1)
+      ),
+      it = matrix(c(1, 2, 3), nrow = 3)
+    ),
+    class = "mesh3d"
+  )
+
+  mesh <- as_babylon_mesh(
+    mesh3d_obj,
+    material = pbr_material3d(base_color = "white", metallic = 0.4, roughness = 0.6),
+    vertex_attributes = list(comparisonPosition = matrix(c(0, 0, 0, 1, 0, 0, 0, 1, 0), ncol = 3, byrow = TRUE))
+  )
+
+  testthat::expect_identical(mesh$material$type, "pbr")
+  testthat::expect_equal(mesh$vertex_attributes$comparisonPosition$size, 3L)
+  testthat::expect_equal(length(mesh$vertex_attributes$comparisonPosition$data), 9L)
+})
+
 testthat::test_that("scene object normalization applies compatibility layer", {
   obj <- normalize_scene_object(list(
     type = "sphere",
@@ -324,10 +393,12 @@ testthat::test_that("meshDist colors the reference mesh and overlays displacemen
   widget <- meshDist(reference, target, displace = TRUE, alpha = 0.4, axes = FALSE)
 
   testthat::expect_equal(length(widget$x$objects), 2L)
-  testthat::expect_identical(widget$x$objects[[1]]$type, "meshdist3d")
-  testthat::expect_equal(length(widget$x$objects[[1]]$comparison_vertices), 9L)
-  testthat::expect_identical(widget$x$objects[[1]]$colorramp, c("#1D4ED8", "#F8FAFC", "#B91C1C"))
-  testthat::expect_equal(widget$x$objects[[1]]$alpha, 0.4)
+  testthat::expect_identical(widget$x$objects[[1]]$type, "mesh3d")
+  testthat::expect_identical(widget$x$objects[[1]]$material$type, "shader")
+  testthat::expect_true(all(c("referenceNormal", "comparisonPosition") %in% names(widget$x$objects[[1]]$vertex_attributes)))
+  testthat::expect_equal(length(widget$x$objects[[1]]$vertex_attributes$comparisonPosition$data), 9L)
+  testthat::expect_identical(widget$x$objects[[1]]$heatmap_legend$colorramp, c("#1D4ED8", "#F8FAFC", "#B91C1C"))
+  testthat::expect_equal(widget$x$objects[[1]]$material$alpha, 0.4)
   testthat::expect_equal(length(widget$x$objects[[2]]$color), 3L)
   testthat::expect_true(all(grepl("^#[0-9A-F]{6}$", widget$x$objects[[2]]$color)))
 
@@ -359,8 +430,8 @@ testthat::test_that("meshDist supports manual from/to scale limits", {
   info <- attr(widget, "mesh_distance")
 
   testthat::expect_equal(info$limits, c(0, 0.25))
-  testthat::expect_equal(widget$x$objects[[1]]$diff_min, 0)
-  testthat::expect_equal(widget$x$objects[[1]]$diff_max, 0.25)
+  testthat::expect_equal(widget$x$objects[[1]]$material$uniforms$diffMin, 0)
+  testthat::expect_equal(widget$x$objects[[1]]$material$uniforms$diffMax, 0.25)
   testthat::expect_identical(info$colors[2], info$colors[3])
 })
 
@@ -383,7 +454,7 @@ testthat::test_that("meshDist accepts custom R color ramps", {
   widget <- meshDist(reference, target, colorramp = c("navy", "#FFFFFF", "gold", "firebrick"), axes = FALSE)
 
   testthat::expect_identical(
-    widget$x$objects[[1]]$colorramp,
+    widget$x$objects[[1]]$heatmap_legend$colorramp,
     c("#000080", "#FFFFFF", "#FFD700", "#B22222")
   )
 })
@@ -405,7 +476,7 @@ testthat::test_that("meshDist supports signed distvec input", {
   testthat::expect_equal(info$magnitudes, c(0.2, 0, 0.3))
   testthat::expect_equal(info$limits, c(-0.3, 0.3))
   testthat::expect_equal(length(widget$x$objects), 2L)
-  testthat::expect_equal(length(widget$x$objects[[1]]$comparison_vertices), 9L)
+  testthat::expect_equal(length(widget$x$objects[[1]]$vertex_attributes$comparisonPosition$data), 9L)
 })
 
 testthat::test_that("heatmap_scale returns a ggplot with matching limits", {

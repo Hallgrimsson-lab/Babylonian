@@ -1,5 +1,5 @@
 modify_babylon_mesh <- function(x, args) {
-  allowed <- c("color", "alpha", "specularity", "position", "rotation", "scaling", "name", "wireframe")
+  allowed <- c("color", "alpha", "specularity", "position", "rotation", "scaling", "name", "wireframe", "material", "vertex_attributes")
 
   for (nm in intersect(names(args), allowed)) {
     value <- args[[nm]]
@@ -9,6 +9,10 @@ modify_babylon_mesh <- function(x, args) {
       value <- normalize_babylon_specularity(value)
     } else if (nm == "wireframe") {
       value <- isTRUE(value)
+    } else if (nm == "material") {
+      value <- normalize_material3d(value)
+    } else if (nm == "vertex_attributes") {
+      value <- normalize_vertex_attributes(value)
     }
     x[[nm]] <- value
   }

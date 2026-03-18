@@ -153,6 +153,37 @@ light3d_directional(
 )
 ```
 
+For more advanced shading, meshes can now carry explicit material descriptors.
+Standard materials remain available, but you can also opt into Babylon PBR
+materials, raw shader materials, or Node Material Editor exports:
+
+```r
+mesh <- as_babylon_mesh(
+  your_morpho_mesh,
+  material = pbr_material3d(
+    base_color = "#c084fc",
+    metallic = 0.15,
+    roughness = 0.55
+  )
+)
+
+babylon(data = list(mesh))
+```
+
+To load a node material export from `inst/extdata`, use:
+
+```r
+node_mat <- node_material3d(
+  file = system.file("extdata", "nodeMaterial-demo.json", package = "Babylonian")
+)
+
+babylon(
+  data = list(
+    as_babylon_mesh(your_morpho_mesh, material = node_mat)
+  )
+)
+```
+
 For figure setup, `edit_scene3d()` opens a gizmo-based editor so you can move
 lights, translate/rotate/scale meshes, then reuse the saved scene state:
 

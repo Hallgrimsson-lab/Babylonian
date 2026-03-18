@@ -60,18 +60,7 @@ meshDist <- function(
     alpha = alpha
   )
 
-  heatmap_mesh <- list(
-    type = "meshdist3d",
-    name = meshdist_data$reference_mesh$name,
-    vertices = meshdist_data$reference_mesh$vertices,
-    indices = meshdist_data$reference_mesh$indices,
-    reference_normals = flatten_vertex_matrix(meshdist_data$reference_normals),
-    comparison_vertices = flatten_vertex_matrix(meshdist_data$target_vertices),
-    colorramp = meshdist_data$colorramp,
-    diff_min = meshdist_data$limits[1],
-    diff_max = meshdist_data$limits[2],
-    alpha = meshdist_data$alpha
-  )
+  heatmap_mesh <- meshdist_shader_mesh(meshdist_data)
 
   objects <- list(heatmap_mesh)
   displace_scale <- normalize_displace_scale(displace)
@@ -117,6 +106,102 @@ meshDist <- function(
     )
   )
   widget
+}
+
+meshdist_shader_mesh <- function(meshdist_data) {
+  structure(
+    list(
+      type = "mesh3d",
+      name = meshdist_data$reference_mesh$name,
+      vertices = meshdist_data$reference_mesh$vertices,
+      indices = meshdist_data$reference_mesh$indices,
+      material = comparison_heatmap_material(
+        colorramp = meshdist_data$colorramp,
+        limits = meshdist_data$limits,
+        alpha = meshdist_data$alpha
+      ),
+      vertex_attributes = list(
+        comparisonPosition = list(
+          data = flatten_vertex_matrix(meshdist_data$target_vertices),
+          size = 3L
+        ),
+        referenceNormal = list(
+          data = flatten_vertex_matrix(meshdist_data$reference_normals),
+          size = 3L
+        )
+      ),
+      heatmap_legend = list(
+        title = "Difference Scale",
+        subtitle = "Signed displacement",
+        colorramp = meshdist_data$colorramp,
+        diff_min = meshdist_data$limits[1],
+        diff_max = meshdist_data$limits[2]
+      )
+    ),
+    class = c("babylon_mesh", "list")
+  )
+}
+
+comparison_heatmap_material <- function(colorramp, limits, alpha) {
+  shader_material3d(
+    name = "comparisonHeatmap",
+    vertex = comparison_heatmap_vertex_shader(),
+    fragment = comparison_heatmap_fragment_shader(),
+    attributes = c("position", "referenceNormal", "comparisonPosition"),
+    uniforms = list(
+      diffMin = limits[1],
+      diffMax = limits[2],
+      alpha = alpha
+    ),
+    textures = list(
+      colorRamp = list(
+        type = "gradient",
+        colors = unname(colorramp),
+        width = 256L,
+        height = 1L
+      )
+    ),
+    alpha = alpha,
+    backface_culling = FALSE
+  )
+}
+
+comparison_heatmap_vertex_shader <- function() {
+  paste(
+    "precision highp float;",
+    "attribute vec3 position;",
+    "attribute vec3 referenceNormal;",
+    "attribute vec3 comparisonPosition;",
+    "uniform mat4 worldViewProjection;",
+    "uniform float diffMin;",
+    "uniform float diffMax;",
+    "varying float vRampT;",
+    "varying float vLight;",
+    "void main(void) {",
+    "  vec3 normalDir = normalize(referenceNormal);",
+    "  float diffValue = dot(comparisonPosition - position, referenceNormal);",
+    "  float diffSpan = max(diffMax - diffMin, 0.000001);",
+    "  vRampT = clamp((diffValue - diffMin) / diffSpan, 0.0, 1.0);",
+    "  vLight = 0.4 + 0.6 * max(dot(normalDir, normalize(vec3(0.35, 0.8, 0.45))), 0.0);",
+    "  gl_Position = worldViewProjection * vec4(position, 1.0);",
+    "}",
+    sep = "\n"
+  )
+}
+
+comparison_heatmap_fragment_shader <- function() {
+  paste(
+    "precision highp float;",
+    "uniform float alpha;",
+    "uniform sampler2D colorRamp;",
+    "varying float vRampT;",
+    "varying float vLight;",
+    "void main(void) {",
+    "  vec3 vColor = texture2D(colorRamp, vec2(vRampT, 0.5)).rgb;",
+    "  gl_FragColor = vec4(vColor * vLight, alpha);",
+    "}",
+    sep = "\n"
+  )
 }
 
 #' Plot the `meshDist()` color scale as a 2D ggplot

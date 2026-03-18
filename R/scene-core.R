@@ -76,6 +76,12 @@ normalize_scene_object <- function(x) {
   }
 
   if (is.list(x)) {
+    if (!is.null(x$material)) {
+      x$material <- normalize_material3d(x$material)
+    }
+    if (!is.null(x$vertex_attributes)) {
+      x$vertex_attributes <- normalize_vertex_attributes(x$vertex_attributes)
+    }
     if (!is.null(x$color)) {
       if (identical(x$type, "segments3d") && length(x$color) > 1L) {
         x$color <- normalize_segment_colors(x$color, nrow(x$points) / 2L)

@@ -182,23 +182,30 @@ scene <- apply_scene_state(scene, state = state)
 snapshot3d("lights-demo.png", widget = scene)
 
 #multiwindow w sync
-left <- babylon(
-  data = list(as_babylon_mesh(mesh, color = "gray75")),
-  sync_group = "compare"
+paired_scene3d(
+  as_babylon_mesh(mesh, color = "gray75"),
+  as_babylon_mesh(mesh2, color = "tomato"),
+  labels = c("Reference", "Target")
 )
 
-right <- babylon(
-  data = list(as_babylon_mesh(mesh2, color = "tomato")),
-  sync_group = "compare"
+# pbr
+pbrmesh <- as_babylon_mesh(
+  mesh,
+  material = pbr_material3d(
+    base_color = "#c084fc",
+    metallic = 0.75,
+    roughness = 0.0
+  )
 )
 
+babylon(data = list(pbrmesh))
 
 # - digitize parity
 # - shader support??
-# - lights
-# - multiwindow
+# - lights: just kinda ok
+# - multiwindow: sync bugged
 # - movies
-# - gizmo support on lights and meshes
+# - gizmo support on lights and meshes: hard to use
 
 #done
 # - heatmap/meshdist/wireframe
