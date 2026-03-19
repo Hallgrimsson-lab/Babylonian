@@ -3,10 +3,10 @@ Type: Package
 Title: BabylonJS for R
 Version: 0.1.0
 Date: 2026-03-15
-Author: Gemini
-Maintainer: Gemini <gemini@google.com>
+Author: J. David Aponte
+Maintainer: J. David Aponte <jose.aponte@ucalgary.ca>
 Description: Provides an R interface to the BabylonJS 3D visualization library.
-License: Apache-2.0
+License: MIT
 Imports:
     htmltools,
     htmlwidgets,

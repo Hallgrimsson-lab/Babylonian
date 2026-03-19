@@ -192,6 +192,89 @@ testthat::test_that("import_model3d discovers gltf sidecars and metadata", {
   testthat::expect_identical(asset$info$nodes, "Root")
 })
 
+testthat::test_that("digitize_landmarks supports geomorph-style landmark count and centering", {
+  mesh <- make_test_mesh3d(
+    vertices = rbind(
+      c(10, 0, 0),
+      c(12, 0, 0),
+      c(10, 2, 0)
+    )
+  )
+
+  widget <- digitize_landmarks(
+    mesh,
+    fixed = 5,
+    index = TRUE,
+    center = TRUE,
+    ptsize = 4,
+    marker_scale = 0.01
+  )
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_identical(widget$x$interaction$n, 5L)
+  testthat::expect_true(isTRUE(widget$x$interaction$index))
+  testthat::expect_equal(colMeans(mesh_vertex_matrix(widget$x$objects[[1]])), c(0, 0, 0), tolerance = 1e-8)
+  testthat::expect_equal(widget$x$interaction$marker$scale, 0.02, tolerance = 1e-8)
+})
+
+testthat::test_that("digitize_landmarks centers fixed landmarks with the mesh", {
+  mesh <- make_test_mesh3d(
+    vertices = rbind(
+      c(1, 1, 1),
+      c(3, 1, 1),
+      c(1, 3, 1)
+    )
+  )
+  fixed <- matrix(c(1, 1, 1), ncol = 3)
+
+  widget <- digitize_landmarks(mesh, fixed = fixed, center = TRUE)
+
+  testthat::expect_equal(widget$x$interaction$fixed, matrix(c(-2 / 3, -2 / 3, 0), ncol = 3), tolerance = 1e-8)
+})
+
+testthat::test_that("digitize_landmarks can return vertex indices alongside coordinates", {
+  payload <- list(
+    list(x = 1, y = 2, z = 3, index = 4),
+    list(x = 5, y = 6, z = 7, index = 8)
+  )
+
+  result <- landmark_result(payload, index = TRUE)
+
+  testthat::expect_equal(result$coords, matrix(c(1, 2, 3, 5, 6, 7), ncol = 3, byrow = TRUE))
+  testthat::expect_equal(result$index, matrix(c(4L, 8L), ncol = 1L))
+})
+
+testthat::test_that("landmark parsing tolerates list-backed matrix payloads", {
+  payload <- matrix(
+    list(1, 2, 3, 4, 5, 6, 7, 8),
+    ncol = 4,
+    byrow = TRUE
+  )
+  colnames(payload) <- c("x", "y", "z", "index")
+
+  testthat::expect_equal(
+    landmarks_to_matrix(payload),
+    matrix(c(1, 2, 3, 5, 6, 7), ncol = 3, byrow = TRUE)
+  )
+  testthat::expect_equal(landmark_indices(payload), matrix(c(4L, 8L), ncol = 1L))
+})
+
+testthat::test_that("digit.fixed forwards to Babylonian landmark digitizing", {
+  mesh <- make_test_mesh3d(
+    vertices = rbind(
+      c(0, 0, 0),
+      c(1, 0, 0),
+      c(0, 1, 0)
+    )
+  )
+
+  widget <- digit.fixed(mesh, fixed = 3, index = TRUE, center = TRUE)
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_identical(widget$x$interaction$n, 3L)
+  testthat::expect_true(isTRUE(widget$x$interaction$index))
+})
+
 testthat::test_that("import_model3d does not require missing gltf sidecars for metadata", {
   tmp_dir <- tempfile("babylon_gltf_missing_")
   dir.create(tmp_dir, recursive = TRUE)

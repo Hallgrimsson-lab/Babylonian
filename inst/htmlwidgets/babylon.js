@@ -1270,15 +1270,124 @@ HTMLWidgets.widget({
       uiLayer.style.display = "block";
       var targetText = state.target ? state.points.length + " / " + state.target : String(state.points.length);
       var exportValue = JSON.stringify(state.points, null, 2);
-      var doneText = state.target && state.points.length >= state.target ? "Target reached" : "Click mesh to add landmarks";
+      var doneText = state.pendingPoint ?
+        "Pending landmark selected. Accept it or retry." :
+        (state.target && state.points.length >= state.target ? "Target reached" : "Click mesh to preview the next landmark");
+      var pendingText = state.pendingPoint ?
+        "<div style='margin-bottom:8px; color:#334155;'>Pending: (" +
+          [state.pendingPoint.x, state.pendingPoint.y, state.pendingPoint.z].map(formatRNumber).join(", ") + ")" +
+          (state.indexEnabled && state.pendingPoint.index !== undefined ? " [vertex " + state.pendingPoint.index + "]" : "") +
+        "</div>" :
+        "";
+      var actionButtons = state.pendingPoint ?
+        "<div style='display:flex; gap:6px; margin-top:8px;'>" +
+          "<button type='button' data-role='accept-landmark' style='flex:1; border:0; border-radius:6px; background:#0f766e; color:white; padding:6px 10px; cursor:pointer;'>Accept</button>" +
+          "<button type='button' data-role='retry-landmark' style='flex:1; border:0; border-radius:6px; background:#b45309; color:white; padding:6px 10px; cursor:pointer;'>Retry</button>" +
+        "</div>" :
+        "";
       uiLayer.innerHTML =
         "<div style='font-weight:700; margin-bottom:6px;'>Landmarks</div>" +
         "<div style='margin-bottom:6px; color:#334155;'>Collected: " + targetText + "</div>" +
         "<div style='margin-bottom:8px; color:#475569;'>" + doneText + "</div>" +
+        pendingText +
         "<textarea readonly style='width:100%; min-height:96px; resize:vertical; font:inherit; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#f8fafc;'>" + exportValue + "</textarea>" +
-        "<button type='button' style='margin-top:8px; border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Copy JSON</button>";
+        actionButtons +
+        "<button type='button' data-role='copy-landmarks' style='margin-top:8px; border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Copy JSON</button>";
 
-      bindCopyButton(uiLayer.querySelector("button"), exportValue);
+      var copyButton = uiLayer.querySelector("[data-role='copy-landmarks']");
+      bindCopyButton(copyButton, exportValue);
+
+      var acceptButton = uiLayer.querySelector("[data-role='accept-landmark']");
+      if (acceptButton) {
+        acceptButton.addEventListener("click", function() {
+          acceptPendingLandmark(state);
+        });
+      }
+
+      var retryButton = uiLayer.querySelector("[data-role='retry-landmark']");
+      if (retryButton) {
+        retryButton.addEventListener("click", function() {
+          clearPendingLandmark(state);
+          updateDigitizePanel(state);
+        });
+      }
+    }
+
+    function clearPendingLandmark(state) {
+      if (!state) {
+        return;
+      }
+
+      if (state.pendingMarker && state.pendingMarker.dispose) {
+        state.pendingMarker.dispose();
+      }
+      state.pendingMarker = null;
+      state.pendingPoint = null;
+    }
+
+    function acceptPendingLandmark(state) {
+      if (!state || !state.pendingPoint) {
+        return;
+      }
+
+      var point = state.pendingPoint;
+      state.points.push({
+        x: point.x,
+        y: point.y,
+        z: point.z,
+        index: point.index
+      });
+      state.pointIndices.push(point.index);
+      state.markers.push(
+        createMarker(
+          new BABYLON.Vector3(point.x, point.y, point.z),
+          state.markerColor,
+          state.markerSize,
+          "digitized-landmark-" + state.points.length,
+          false
+        )
+      );
+      clearPendingLandmark(state);
+      publishLandmarks(state);
+    }
+
+    function nearestVertexPick(mesh, pickedPoint) {
+      if (!mesh || !pickedPoint || !mesh.getVerticesData) {
+        return null;
+      }
+
+      var positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+      if (!positions || !positions.length) {
+        return null;
+      }
+
+      mesh.computeWorldMatrix(true);
+      var worldMatrix = mesh.getWorldMatrix();
+      var nearestDistance = Infinity;
+      var nearestIndex = -1;
+      var nearestPoint = null;
+
+      for (var i = 0; i < positions.length; i += 3) {
+        var localPoint = BABYLON.Vector3.FromArray(positions, i);
+        var worldPoint = BABYLON.Vector3.TransformCoordinates(localPoint, worldMatrix);
+        var distance = BABYLON.Vector3.DistanceSquared(worldPoint, pickedPoint);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestIndex = (i / 3) + 1;
+          nearestPoint = worldPoint;
+        }
+      }
+
+      if (nearestIndex < 1 || !nearestPoint) {
+        return null;
+      }
+
+      return {
+        x: nearestPoint.x,
+        y: nearestPoint.y,
+        z: nearestPoint.z,
+        index: nearestIndex
+      };
     }
 
     function heatmapLegendSpec(primitive) {
@@ -1986,9 +2095,13 @@ HTMLWidgets.widget({
         mode: interaction.mode,
         widgetId: el.id || null,
         target: interaction.n || null,
+        indexEnabled: interaction.index === true,
         markerColor: interaction.marker && interaction.marker.color ? interaction.marker.color : "#dc2626",
         markerScale: interaction.marker && interaction.marker.scale ? interaction.marker.scale : 0.015,
         points: [],
+        pointIndices: [],
+        pendingPoint: null,
+        pendingMarker: null,
         markers: []
       };
       state.markerSize = meshRadius(primaryMesh) * state.markerScale;
@@ -2021,18 +2134,21 @@ HTMLWidgets.widget({
           return;
         }
 
-        var point = pickInfo.pickedPoint.clone();
-        state.points.push(toCoordinateArray(point));
-        state.markers.push(
-          createMarker(
-            point,
-            state.markerColor,
-            state.markerSize,
-            "digitized-landmark-" + state.points.length,
-            false
-          )
+        var point = nearestVertexPick(primaryMesh, pickInfo.pickedPoint.clone());
+        if (!point) {
+          return;
+        }
+
+        clearPendingLandmark(state);
+        state.pendingPoint = point;
+        state.pendingMarker = createMarker(
+          new BABYLON.Vector3(point.x, point.y, point.z),
+          "#f59e0b",
+          state.markerSize,
+          "pending-landmark-" + (state.points.length + 1),
+          false
         );
-        publishLandmarks(state);
+        updateDigitizePanel(state);
       });
 
       publishLandmarks(state);

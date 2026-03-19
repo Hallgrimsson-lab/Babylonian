@@ -61,7 +61,7 @@ segments3d(rbind(
   c(0, 1, 0), c(0, 1, 1)
 ))
 
-
+bg3d("black")
 Babylonian::meshDist(mesh2, mesh, axes = F, alpha = 0, displace = T)
 Babylonian::meshDist(mesh2, mesh, axes = F, alpha = 0.5, displace = T, from =-2, to = 12)
 
@@ -227,6 +227,7 @@ scene <- babylon(
 state <- edit_scene3d(scene)
 scene_prep <- apply_scene_state(scene, state = state)
 bg3d("black")
+
 record_scene3d(
   scene_prep,
   file = "heatmap.mp4",
@@ -258,7 +259,16 @@ create_pose_3d(brainstem)
 plot3d(brainstem)
 babylon(data = list(brainstem))
 
-# - digitize parity
+# glb
+brainstem <- import_model3d(
+  system.file("extdata", "Bee.glb", package = "Babylonian")
+)
+
+
+digit.fixed(mesh, fixed = 3, index = TRUE, ptsize = 1, center = TRUE)
+
+
+
 # - lights: just kinda ok
 # - gizmo support on lights and meshes: hard to use
 # - camera focus sharpness and other postprocessing
@@ -268,5 +278,6 @@ babylon(data = list(brainstem))
 # - shader support??
 # - movies
 # - multiwindow
+# - digitize parity
 
 

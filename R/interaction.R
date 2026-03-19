@@ -1,13 +1,21 @@
 #' Start an interactive landmark digitizer on a Babylon mesh
 #'
 #' This creates a Babylon widget that captures surface picks using BabylonJS
-#' ray casting. In interactive R sessions, landmarking completes by returning a
-#' three-column coordinate matrix. In non-interactive contexts, the function
-#' returns the underlying widget.
+#' ray casting. Landmark picks are snapped to the nearest mesh vertex so the
+#' workflow more closely mirrors Geomorph's 3D digitizing tools. In interactive
+#' R sessions, landmarking completes by returning a three-column coordinate
+#' matrix, or a list with coordinates and vertex indices when `index = TRUE`.
+#' In non-interactive contexts, the function returns the underlying widget.
 #'
 #' @param x A `babylon_mesh` object or `mesh3d` object.
 #' @param n Optional target number of landmarks to collect.
-#' @param fixed Optional matrix of fixed landmarks to show on the surface.
+#' @param fixed Either the number of landmarks to collect, matching Geomorph's
+#'   `digit.fixed()` usage, or a matrix of fixed landmarks to show on the
+#'   surface.
+#' @param index Whether to also return the selected vertex indices.
+#' @param ptsize Optional point-size hint, similar to Geomorph. In Babylonian
+#'   this scales the landmark marker size.
+#' @param center Whether to center the mesh coordinates before digitizing.
 #' @param width Widget width.
 #' @param height Widget height.
 #' @param elementId Optional widget element id.
@@ -19,6 +27,9 @@ digitize_landmarks <- function(
   x,
   n = NULL,
   fixed = NULL,
+  index = FALSE,
+  ptsize = 1,
+  center = TRUE,
   width = NULL,
   height = NULL,
   elementId = NULL,
@@ -31,14 +42,26 @@ digitize_landmarks <- function(
     stop("`x` must be a `babylon_mesh` or `mesh3d` object.", call. = FALSE)
   }
 
+  target_n <- resolve_landmark_target_count(n = n, fixed = fixed)
+  fixed_landmarks <- resolve_fixed_landmarks(fixed)
+  prepared <- prepare_digitize_landmark_mesh(
+    mesh,
+    fixed = fixed_landmarks,
+    center = center
+  )
+  mesh <- prepared$mesh
+  fixed_landmarks <- prepared$fixed
+
   interaction <- list(
     mode = "digitize_landmarks",
-    n = if (is.null(n)) NULL else as.integer(n),
-    fixed = normalize_landmarks(fixed),
+    n = target_n,
+    fixed = fixed_landmarks,
+    index = isTRUE(index),
     marker = list(
       color = normalize_babylon_color(marker_color),
-      scale = marker_scale
-    )
+      scale = normalize_digitize_marker_scale(marker_scale, ptsize)
+    ),
+    center = isTRUE(center)
   )
 
   widget <- babylon(
@@ -54,7 +77,51 @@ digitize_landmarks <- function(
     return(widget)
   }
 
-  run_landmark_gadget(widget, n = n)
+  run_landmark_gadget(widget, n = target_n, index = isTRUE(index))
+}
+
+#' Geomorph-style compatibility wrapper for fixed 3D landmark digitizing
+#'
+#' This mirrors the core interface of Geomorph's `digit.fixed()` while using
+#' Babylonian's interactive mesh digitizer under the hood.
+#'
+#' @param spec A `mesh3d` or `babylon_mesh` object.
+#' @param fixed The number of landmarks to digitize, or a matrix of fixed
+#'   landmarks to display.
+#' @param index Whether to also return selected vertex indices.
+#' @param ptsize Optional point-size hint used to scale landmark markers.
+#' @param center Whether to center the mesh before digitizing.
+#' @param width Widget width.
+#' @param height Widget height.
+#' @param elementId Optional widget element id.
+#' @param marker_color Landmark marker color.
+#' @param marker_scale Landmark marker diameter as a fraction of mesh radius.
+#'
+#' @export
+digit.fixed <- function(
+  spec,
+  fixed,
+  index = FALSE,
+  ptsize = 1,
+  center = TRUE,
+  width = NULL,
+  height = NULL,
+  elementId = NULL,
+  marker_color = "#dc2626",
+  marker_scale = 0.015
+) {
+  digitize_landmarks(
+    x = spec,
+    fixed = fixed,
+    index = index,
+    ptsize = ptsize,
+    center = center,
+    width = width,
+    height = height,
+    elementId = elementId,
+    marker_color = marker_color,
+    marker_scale = marker_scale
+  )
 }
 
 #' Interactively pose a 3D scene and return its view parameters
@@ -223,6 +290,80 @@ normalize_landmarks <- function(x) {
   }
 
   unname(x)
+}
+
+resolve_landmark_target_count <- function(n = NULL, fixed = NULL) {
+  fixed_count <- NULL
+  if (is.numeric(fixed) && length(fixed) == 1L && is.finite(fixed[[1]])) {
+    fixed_count <- as.integer(fixed[[1]])
+  }
+
+  if (is.null(n) && is.null(fixed_count)) {
+    return(NULL)
+  }
+
+  if (!is.null(n)) {
+    n <- as.integer(n[[1]])
+    if (!is.finite(n) || n < 1L) {
+      stop("`n` must be a positive integer.", call. = FALSE)
+    }
+    if (!is.null(fixed_count) && !identical(n, fixed_count)) {
+      stop("When `fixed` is used as a landmark count, it must match `n` if both are supplied.", call. = FALSE)
+    }
+    return(n)
+  }
+
+  if (!is.finite(fixed_count) || fixed_count < 1L) {
+    stop("When numeric, `fixed` must be a positive integer landmark count.", call. = FALSE)
+  }
+
+  fixed_count
+}
+
+resolve_fixed_landmarks <- function(fixed) {
+  if (is.null(fixed)) {
+    return(NULL)
+  }
+
+  if (is.numeric(fixed) && length(fixed) == 1L && is.finite(fixed[[1]])) {
+    return(NULL)
+  }
+
+  normalize_landmarks(fixed)
+}
+
+prepare_digitize_landmark_mesh <- function(mesh, fixed = NULL, center = TRUE) {
+  if (!isTRUE(center)) {
+    return(list(mesh = mesh, fixed = fixed))
+  }
+
+  vertices <- mesh_vertex_matrix(mesh)
+  center_point <- colMeans(vertices)
+  mesh$vertices <- flatten_vertex_matrix(sweep(vertices, 2L, center_point, "-"))
+
+  if (!is.null(mesh$morph_target) && !is.null(mesh$morph_target$vertices)) {
+    morph_vertices <- t(matrix(mesh$morph_target$vertices, nrow = 3L))
+    morph_vertices <- sweep(validate_xyz_matrix(morph_vertices), 2L, center_point, "-")
+    mesh$morph_target$vertices <- flatten_vertex_matrix(morph_vertices)
+  }
+
+  if (!is.null(fixed)) {
+    fixed <- sweep(normalize_landmarks(fixed), 2L, center_point, "-")
+  }
+
+  list(mesh = mesh, fixed = fixed)
+}
+
+normalize_digitize_marker_scale <- function(marker_scale, ptsize = 1) {
+  if (!is.numeric(marker_scale) || length(marker_scale) != 1L || !is.finite(marker_scale[[1]]) || marker_scale[[1]] <= 0) {
+    stop("`marker_scale` must be a positive numeric scalar.", call. = FALSE)
+  }
+
+  if (!is.numeric(ptsize) || length(ptsize) != 1L || !is.finite(ptsize[[1]]) || ptsize[[1]] <= 0) {
+    stop("`ptsize` must be a positive numeric scalar.", call. = FALSE)
+  }
+
+  as.numeric(marker_scale[[1]]) * sqrt(as.numeric(ptsize[[1]]))
 }
 
 set_last_scene_state <- function(x) {
@@ -506,7 +647,7 @@ normalize_transform_vector <- function(x, arg) {
   unname(as.numeric(x))
 }
 
-run_landmark_gadget <- function(widget, n = NULL) {
+run_landmark_gadget <- function(widget, n = NULL, index = FALSE) {
   if (!requireNamespace("shiny", quietly = TRUE)) {
     warning("Package 'shiny' is required for interactive landmark collection; returning the widget instead.")
     return(widget)
@@ -556,18 +697,17 @@ run_landmark_gadget <- function(widget, n = NULL) {
     shiny::observeEvent(input[[landmark_input]], {
       pts <- input[[landmark_input]]
       if (!is.null(n) && landmark_count(pts) >= n) {
-        coords <- landmarks_to_matrix(pts)
-        shiny::stopApp(coords)
+        shiny::stopApp(landmark_result(pts, index = index))
       }
     }, ignoreNULL = TRUE)
 
     shiny::observeEvent(input$done, {
       pts <- input[[landmark_input]]
       if (landmark_count(pts) == 0) {
-        shiny::stopApp(matrix(numeric(0), ncol = 3))
+        shiny::stopApp(landmark_result(NULL, index = index))
       }
 
-      shiny::stopApp(landmarks_to_matrix(pts))
+      shiny::stopApp(landmark_result(pts, index = index))
     })
 
     shiny::observeEvent(input$cancel, {
@@ -751,6 +891,18 @@ landmark_count <- function(x) {
   length(x)
 }
 
+landmark_result <- function(x, index = FALSE) {
+  coords <- landmarks_to_matrix(x)
+  if (!isTRUE(index)) {
+    return(coords)
+  }
+
+  list(
+    coords = coords,
+    index = landmark_indices(x)
+  )
+}
+
 landmarks_to_matrix <- function(x) {
   if (is.null(x) || landmark_count(x) == 0) {
     return(matrix(numeric(0), ncol = 3))
@@ -762,6 +914,19 @@ landmarks_to_matrix <- function(x) {
   }
 
   coords
+}
+
+landmark_indices <- function(x) {
+  if (is.null(x) || landmark_count(x) == 0) {
+    return(matrix(integer(0), ncol = 1L))
+  }
+
+  indices <- extract_landmark_indices(x)
+  if (is.null(indices)) {
+    return(matrix(integer(0), ncol = 1L))
+  }
+
+  matrix(as.integer(indices), ncol = 1L)
 }
 
 extract_landmark_matrix <- function(x) {
@@ -810,6 +975,52 @@ extract_landmark_matrix <- function(x) {
   NULL
 }
 
+extract_landmark_indices <- function(x) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+
+  if (is.character(x) && length(x) == 1L) {
+    if (!nzchar(x)) {
+      return(NULL)
+    }
+    if (!requireNamespace("jsonlite", quietly = TRUE)) {
+      stop("Package 'jsonlite' is required to parse landmark data.", call. = FALSE)
+    }
+    parsed <- jsonlite::fromJSON(x, simplifyVector = TRUE)
+    return(extract_landmark_indices(parsed))
+  }
+
+  if (is.data.frame(x) && "index" %in% tolower(names(x))) {
+    idx <- match("index", tolower(names(x)))
+    return(as.integer(x[[idx]]))
+  }
+
+  if (is.matrix(x) && !is.null(colnames(x)) && "index" %in% tolower(colnames(x))) {
+    idx <- match("index", tolower(colnames(x)))
+    return(as.integer(x[, idx]))
+  }
+
+  if (is.list(x) && is_coordinate_columns(x) && "index" %in% names(x)) {
+    return(as.integer(x[["index"]]))
+  }
+
+  if (is.list(x) && length(x)) {
+    row_indices <- lapply(x, function(row) {
+      if (is.list(row) && !is.null(row[["index"]])) {
+        return(as.integer(row[["index"]]))
+      }
+      NULL
+    })
+    row_indices <- Filter(Negate(is.null), row_indices)
+    if (length(row_indices)) {
+      return(unlist(row_indices, use.names = FALSE))
+    }
+  }
+
+  NULL
+}
+
 parse_landmark_json <- function(x) {
   if (!nzchar(x)) {
     return(matrix(numeric(0), ncol = 3))
@@ -828,6 +1039,20 @@ normalize_landmark_columns <- function(x) {
     return(NULL)
   }
 
+  if (is.list(x) && is_coordinate_columns(x)) {
+    return(unname(cbind(x[["x"]], x[["y"]], x[["z"]])))
+  }
+
+  if (is.list(x) && is.null(dim(x))) {
+    rowwise <- tryCatch(
+      unname(do.call(rbind, lapply(x, function(row) unlist(row, use.names = FALSE)))),
+      error = function(e) NULL
+    )
+    if (!is.null(rowwise)) {
+      x <- rowwise
+    }
+  }
+
   if (is.vector(x) && !is.list(x)) {
     if (length(x) %% 3L != 0L) {
       return(NULL)
@@ -837,6 +1062,22 @@ normalize_landmark_columns <- function(x) {
 
   if (is.null(dim(x))) {
     return(NULL)
+  }
+
+  if (is.list(x)) {
+    x <- tryCatch(
+      apply(x, c(1, 2), function(value) {
+        value <- unlist(value, recursive = TRUE, use.names = FALSE)
+        if (!length(value)) {
+          return(NA_real_)
+        }
+        as.numeric(value[[1]])
+      }),
+      error = function(e) NULL
+    )
+    if (is.null(x)) {
+      return(NULL)
+    }
   }
 
   x <- unname(x)
