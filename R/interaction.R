@@ -244,6 +244,9 @@ apply_scene_state <- function(x = NULL, state = last_scene_state(), ...) {
       scene_spec$scene$view <- normalize_view(state$view)
       .babylon_state$last_scene_par3d <- deserialize_par3d(scene_spec$scene$view)
     }
+    if (!is.null(state$postprocess)) {
+      scene_spec$scene$postprocess <- normalize_scene_postprocesses(state$postprocess)
+    }
 
     .babylon_state$current_scene <- scene_spec
     set_last_scene_state(state)
@@ -267,6 +270,9 @@ apply_scene_state <- function(x = NULL, state = last_scene_state(), ...) {
   if (!is.null(state$view)) {
     widget$x$scene$view <- normalize_view(state$view)
     .babylon_state$last_scene_par3d <- deserialize_par3d(widget$x$scene$view)
+  }
+  if (!is.null(state$postprocess)) {
+    widget$x$scene$postprocess <- normalize_scene_postprocesses(state$postprocess)
   }
 
   set_last_scene_state(state)
@@ -406,6 +412,7 @@ scene_state_from_widget <- function(widget) {
 
   list(
     view = scene$view %||% serialize_par3d(.babylon_state$par3d),
+    postprocess = scene$postprocess %||% NULL,
     objects = Filter(
       Negate(is.null),
       lapply(seq_along(objects), function(i) seed_scene_state_entry(objects[[i]], i))
@@ -466,11 +473,16 @@ normalize_scene_state <- function(x) {
 
   state <- list(
     view = NULL,
+    postprocess = NULL,
     objects = list()
   )
 
   if (!is.null(x$view)) {
     state$view <- normalize_view(x$view)
+  }
+
+  if (!is.null(x$postprocess)) {
+    state$postprocess <- normalize_scene_postprocesses(x$postprocess)
   }
 
   objects <- x$objects %||% list()

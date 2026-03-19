@@ -15,6 +15,59 @@ testthat::test_that("named colors normalize to hex", {
   testthat::expect_identical(normalize_babylon_color("#123456"), "#123456")
 })
 
+testthat::test_that("scene post-process helpers build normalized descriptors", {
+  dof <- dof3d(
+    focus_distance = 150,
+    f_stop = 2.8,
+    focal_length = 85,
+    blur_level = "high"
+  )
+
+  testthat::expect_s3_class(dof, "babylon_postprocess")
+  testthat::expect_identical(dof$type, "depth_of_field")
+  testthat::expect_identical(dof$blur_level, "high")
+  testthat::expect_equal(dof$focus_distance, 150)
+  testthat::expect_equal(dof$f_stop, 2.8)
+  testthat::expect_equal(dof$focal_length, 85)
+})
+
+testthat::test_that("babylon normalizes scene post-process descriptors", {
+  widget <- babylon(
+    data = list(as_babylon_points(matrix(c(0, 0, 0), ncol = 3))),
+    scene = list(
+      postprocess = list(
+        dof3d(focus_distance = 120, f_stop = 2, blur_level = "medium")
+      )
+    )
+  )
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_identical(widget$x$scene$postprocess[[1]]$type, "depth_of_field")
+  testthat::expect_identical(widget$x$scene$postprocess[[1]]$blur_level, "medium")
+})
+
+testthat::test_that("scene editor state carries and reapplies post-process settings", {
+  widget <- babylon(
+    data = list(as_babylon_points(matrix(c(0, 0, 0), ncol = 3))),
+    scene = list(
+      postprocess = list(
+        dof3d(focus_distance = 80, f_stop = 2.2, focal_length = 35, blur_level = "low")
+      )
+    )
+  )
+
+  state <- scene_state_from_widget(widget)
+  testthat::expect_identical(state$postprocess[[1]]$type, "depth_of_field")
+  testthat::expect_equal(state$postprocess[[1]]$focus_distance, 80)
+
+  state$postprocess[[1]]$focus_distance <- 120
+  state$postprocess[[1]]$blur_level <- "high"
+  updated <- apply_scene_state(widget, state = state)
+
+  testthat::expect_equal(updated$x$scene$postprocess[[1]]$focus_distance, 120)
+  testthat::expect_identical(updated$x$scene$postprocess[[1]]$blur_level, "high")
+})
+
 testthat::test_that("numeric palette indices normalize using the active palette", {
   value <- normalize_babylon_color(2)
   testthat::expect_type(value, "character")
@@ -106,6 +159,34 @@ testthat::test_that("node materials load from packaged JSON exports", {
   testthat::expect_identical(material$type, "node")
   testthat::expect_true(is.list(material$source))
   testthat::expect_identical(material$params[["Surface Color"]]$type, "color3")
+})
+
+testthat::test_that("node materials without exposed params survive mesh normalization", {
+  file <- system.file("extdata", "nodeMaterial-demo.json", package = "Babylonian")
+  if (!nzchar(file)) {
+    file <- normalizePath(file.path("..", "..", "inst", "extdata", "nodeMaterial-demo.json"), winslash = "/", mustWork = TRUE)
+  }
+
+  mesh3d_obj <- structure(
+    list(
+      vb = rbind(
+        c(0, 1, 0),
+        c(0, 0, 1),
+        c(0, 0, 0),
+        c(1, 1, 1)
+      ),
+      it = matrix(c(1, 2, 3), nrow = 3)
+    ),
+    class = "mesh3d"
+  )
+
+  material <- node_material3d(file = file)
+  mesh <- as_babylon_mesh(mesh3d_obj, material = material)
+  widget <- plot3d(mesh)
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_identical(widget$x$objects[[1]]$material$type, "node")
+  testthat::expect_equal(length(widget$x$objects[[1]]$material$params), 0L)
 })
 
 testthat::test_that("meshes can carry advanced materials and custom vertex attributes", {
@@ -1006,6 +1087,35 @@ testthat::test_that("apply_scene_state updates meshes, lights, and view state", 
   testthat::expect_equal(updated$x$scene$view$zoom, 1.5)
   testthat::expect_identical(updated$x$scene$view$bg, "#445566")
   testthat::expect_equal(last_scene_state()$objects[[1]]$position, c(1, 2, 3))
+})
+
+testthat::test_that("apply_scene_state preserves exact camera view data when supplied", {
+  widget <- babylon(
+    data = list(
+      structure(
+        list(type = "mesh3d", name = "specimen"),
+        class = c("babylon_mesh", "list")
+      )
+    ),
+    scene = list(view = serialize_par3d(list(zoom = 1, userMatrix = diag(4), bg = "#FAFAFA")))
+  )
+
+  state <- list(
+    view = list(
+      zoom = 1.2,
+      userMatrix = diag(4),
+      bg = "#112233",
+      camera = list(alpha = 0.5, beta = 1.1, radius = 12, target = c(1, 2, 3))
+    ),
+    objects = list()
+  )
+
+  updated <- apply_scene_state(widget, state = state)
+
+  testthat::expect_equal(updated$x$scene$view$camera$alpha, 0.5)
+  testthat::expect_equal(updated$x$scene$view$camera$beta, 1.1)
+  testthat::expect_equal(updated$x$scene$view$camera$radius, 12)
+  testthat::expect_equal(updated$x$scene$view$camera$target, c(1, 2, 3))
 })
 
 testthat::test_that("segments3d supports per-segment colors", {

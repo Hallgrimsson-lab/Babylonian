@@ -60,15 +60,15 @@ extract_scene_dependencies <- function(x, dependencies = list()) {
     return(list(value = x, dependencies = dependencies))
   }
 
-  if (!is.null(x$dep)) {
-    dependencies[[length(dependencies) + 1L]] <- x$dep
-    x$dep <- NULL
+  if (!is.null(x[["dep"]])) {
+    dependencies[[length(dependencies) + 1L]] <- x[["dep"]]
+    x[["dep"]] <- NULL
   }
 
   if (length(x)) {
     for (i in seq_along(x)) {
       extracted <- extract_scene_dependencies(x[[i]], dependencies)
-      x[[i]] <- extracted$value
+      x[i] <- list(extracted$value)
       dependencies <- extracted$dependencies
     }
   }
@@ -169,6 +169,10 @@ normalize_scene <- function(x) {
 
   if (!is.null(x$sync)) {
     x$sync <- normalize_scene_sync(x$sync)
+  }
+
+  if (!is.null(x$postprocess)) {
+    x$postprocess <- normalize_scene_postprocesses(x$postprocess)
   }
 
   x
@@ -302,11 +306,17 @@ normalize_view <- function(x) {
     bg <- normalize_babylon_color(bg)
   }
 
-  serialize_par3d(list(
+  view <- serialize_par3d(list(
     zoom = zoom,
     userMatrix = user_matrix,
     bg = bg
   ))
+
+  if (!is.null(x$camera)) {
+    view$camera <- normalize_view_camera(x$camera)
+  }
+
+  view
 }
 
 serialize_par3d <- function(x) {
@@ -333,6 +343,35 @@ deserialize_par3d <- function(x) {
 set_last_live_par3d <- function(x) {
   .babylon_state$last_live_par3d <- deserialize_par3d(x)
   invisible(.babylon_state$last_live_par3d)
+}
+
+normalize_view_camera <- function(x) {
+  if (is.null(x) || !is.list(x)) {
+    stop("`view$camera` must be a list with `alpha`, `beta`, `radius`, and `target`.", call. = FALSE)
+  }
+
+  alpha <- as.numeric(x$alpha[[1]])
+  beta <- as.numeric(x$beta[[1]])
+  radius <- as.numeric(x$radius[[1]])
+  target <- x$target
+  if (is.list(target)) {
+    target <- unlist(target, recursive = TRUE, use.names = FALSE)
+  }
+  target <- as.numeric(target)
+
+  if (!is.finite(alpha) || !is.finite(beta) || !is.finite(radius) || radius <= 0) {
+    stop("`view$camera` must contain finite `alpha`, `beta`, and positive `radius` values.", call. = FALSE)
+  }
+  if (length(target) != 3L || !all(is.finite(target))) {
+    stop("`view$camera$target` must be a finite numeric vector of length 3.", call. = FALSE)
+  }
+
+  list(
+    alpha = alpha,
+    beta = beta,
+    radius = radius,
+    target = unname(target)
+  )
 }
 
 normalize_user_matrix <- function(x) {

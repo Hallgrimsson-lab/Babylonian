@@ -179,7 +179,8 @@ scene <- babylon(
 
 state <- edit_scene3d(scene)
 scene <- apply_scene_state(scene, state = state)
-snapshot3d("lights-demo.png", widget = scene)
+scene2 <- apply_scene_state(scene, state)
+snapshot3d("lights-demo.png", widget = scene2)
 
 #multiwindow w sync
 paired_scene3d(
@@ -267,6 +268,28 @@ brainstem <- import_model3d(
 
 digit.fixed(mesh, fixed = 3, index = TRUE, ptsize = 1, center = TRUE)
 
+# node material editor imports
+node_mat <- node_material3d(
+  file = system.file("extdata", "nodeMaterial-demo.json", package = "Babylonian")
+)
+
+plot3d(
+  as_babylon_mesh(mesh, material = node_mat)
+)
+
+babylon(
+  data = list(as_babylon_mesh(mesh, color = "gray75")),
+  scene = list(
+    postprocess = list(
+      dof3d(
+        focus_distance = 100,
+        f_stop = 1.8,
+        focal_length = 30,
+        blur_level = "high"
+      )
+    )
+  )
+)
 
 
 # - lights: just kinda ok

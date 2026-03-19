@@ -51,6 +51,7 @@ HTMLWidgets.widget({
     var managedMaterials = [];
     var managedTextures = [];
     var managedLights = [];
+    var managedPipelines = [];
 
     var uiLayer = document.createElement("div");
     uiLayer.style.position = "absolute";
@@ -134,6 +135,10 @@ HTMLWidgets.widget({
 
     function registerLight(light) {
       return registerDisposable(managedLights, light);
+    }
+
+    function registerPipeline(pipeline) {
+      return registerDisposable(managedPipelines, pipeline);
     }
 
     function disposeCollection(collection) {
@@ -332,10 +337,67 @@ HTMLWidgets.widget({
       return new BABYLON.Color4(color3.r, color3.g, color3.b, a);
     }
 
+    function color3ToHex(value, fallback) {
+      if (value && typeof value.toHexString === "function") {
+        return value.toHexString();
+      }
+
+      var color = coerceColor3(value, fallback ? coerceColor3(fallback, null) : null);
+      if (color && typeof color.toHexString === "function") {
+        return color.toHexString();
+      }
+
+      return fallback || "#ffffff";
+    }
+
     function applySceneBackground(sceneOptions) {
       var view = sceneOptions && sceneOptions.view ? sceneOptions.view : null;
       var fallback = defaultSceneBackground.clone();
       scene.clearColor = coerceColor4(view && view.bg ? view.bg : null, 1, fallback);
+    }
+
+    function depthOfFieldBlurLevel(level) {
+      var value = typeof level === "string" ? level.toLowerCase() : "low";
+      if (value === "high") {
+        return BABYLON.DepthOfFieldEffectBlurLevel.High;
+      }
+      if (value === "medium") {
+        return BABYLON.DepthOfFieldEffectBlurLevel.Medium;
+      }
+      return BABYLON.DepthOfFieldEffectBlurLevel.Low;
+    }
+
+    function applyScenePostProcesses(sceneOptions) {
+      var effects = sceneOptions && sceneOptions.postprocess ? sceneOptions.postprocess : null;
+      if (!effects || !effects.length) {
+        return;
+      }
+
+      effects.forEach(function(effect, index) {
+        if (!effect || effect.type !== "depth_of_field") {
+          return;
+        }
+
+        var pipeline = registerPipeline(new BABYLON.DefaultRenderingPipeline(
+          "babylonian-postprocess-" + index,
+          true,
+          scene,
+          [camera]
+        ));
+        pipeline.samples = 4;
+        pipeline.depthOfFieldEnabled = true;
+        pipeline.depthOfFieldBlurLevel = depthOfFieldBlurLevel(effect.blur_level);
+
+        if (effect.focus_distance !== undefined && pipeline.depthOfField) {
+          pipeline.depthOfField.focusDistance = Number(effect.focus_distance);
+        }
+        if (effect.f_stop !== undefined && pipeline.depthOfField) {
+          pipeline.depthOfField.fStop = Number(effect.f_stop);
+        }
+        if (effect.focal_length !== undefined && pipeline.depthOfField) {
+          pipeline.depthOfField.focalLength = Number(effect.focal_length);
+        }
+      });
     }
 
     function mergeViewOptions(nextView) {
@@ -1002,8 +1064,8 @@ HTMLWidgets.widget({
       return marker;
     }
 
-    function createLightHelper(light, primitive, name) {
-      if (!light || !light.position) {
+    function createLightHelper(node, primitive, name) {
+      if (!node || !node.position) {
         return null;
       }
 
@@ -1011,7 +1073,7 @@ HTMLWidgets.widget({
         Math.max(currentSceneBounds.radius * 0.05, 0.03) :
         0.1;
       var helperColor = primitive && primitive.diffuse ? primitive.diffuse : "#f59e0b";
-      var helper = createMarker(light.position, helperColor, helperSize, name + "-helper", false);
+      var helper = createMarker(node.position, helperColor, helperSize, name + "-helper", false);
       helper.isPickable = false;
       helper.metadata = helper.metadata || {};
       helper.metadata.babylonianHelper = true;
@@ -1098,12 +1160,92 @@ HTMLWidgets.widget({
       return v.scale(1 / length);
     }
 
+    function alignNodeForwardToDirection(node, direction) {
+      if (!node) {
+        return;
+      }
+
+      var from = new BABYLON.Vector3(0, 0, 1);
+      var to = normalizeVector(direction);
+      var dot = BABYLON.Vector3.Dot(from, to);
+
+      if (dot > 0.999999) {
+        node.rotationQuaternion = BABYLON.Quaternion.Identity();
+        return;
+      }
+
+      if (dot < -0.999999) {
+        node.rotationQuaternion = BABYLON.Quaternion.RotationAxis(new BABYLON.Vector3(0, 1, 0), Math.PI);
+        return;
+      }
+
+      var axis = BABYLON.Vector3.Cross(from, to);
+      axis.normalize();
+      var angle = Math.acos(Math.max(-1, Math.min(1, dot)));
+      node.rotationQuaternion = BABYLON.Quaternion.RotationAxis(axis, angle);
+    }
+
+    function directionFromNode(node, fallback) {
+      if (!node) {
+        return normalizeVector(fallback || new BABYLON.Vector3(0, 0, 1));
+      }
+
+      if (typeof node.computeWorldMatrix === "function") {
+        node.computeWorldMatrix(true);
+      }
+
+      if (typeof node.getDirection === "function") {
+        return normalizeVector(node.getDirection(BABYLON.Axis.Z));
+      }
+
+      return normalizeVector(fallback || new BABYLON.Vector3(0, 0, 1));
+    }
+
     function cross(a, b) {
       return new BABYLON.Vector3(
         a.y * b.z - a.z * b.y,
         a.z * b.x - a.x * b.z,
         a.x * b.y - a.y * b.x
       );
+    }
+
+    function rotationMatrix3FromDirections(from, to) {
+      var source = normalizeVector(from);
+      var target = normalizeVector(to);
+      var dot = BABYLON.Vector3.Dot(source, target);
+      var quaternion = null;
+
+      if (dot > 0.999999) {
+        return [
+          [1, 0, 0],
+          [0, 1, 0],
+          [0, 0, 1]
+        ];
+      }
+
+      if (dot < -0.999999) {
+        var fallbackAxis = BABYLON.Vector3.Cross(source, new BABYLON.Vector3(0, 1, 0));
+        if (fallbackAxis.lengthSquared() <= 1e-12) {
+          fallbackAxis = BABYLON.Vector3.Cross(source, new BABYLON.Vector3(1, 0, 0));
+        }
+        fallbackAxis.normalize();
+        quaternion = BABYLON.Quaternion.RotationAxis(fallbackAxis, Math.PI);
+      } else {
+        var axis = BABYLON.Vector3.Cross(source, target);
+        axis.normalize();
+        quaternion = BABYLON.Quaternion.RotationAxis(
+          axis,
+          Math.acos(Math.max(-1, Math.min(1, dot)))
+        );
+      }
+
+      var matrix = new BABYLON.Matrix();
+      BABYLON.Matrix.FromQuaternionToRef(quaternion, matrix);
+      return [
+        [matrix.m[0], matrix.m[1], matrix.m[2]],
+        [matrix.m[4], matrix.m[5], matrix.m[6]],
+        [matrix.m[8], matrix.m[9], matrix.m[10]]
+      ];
     }
 
     function transpose3(m) {
@@ -1149,6 +1291,7 @@ HTMLWidgets.widget({
       disposeCollection(managedLights);
       disposeCollection(managedMaterials);
       disposeCollection(managedTextures);
+      disposeCollection(managedPipelines);
     }
 
     function formatRNumber(x) {
@@ -1447,30 +1590,9 @@ HTMLWidgets.widget({
 
       var target = currentSceneBounds.center;
       var currentOffset = camera.position.subtract(target);
-      var currentUp = camera.upVector.clone();
-
-      var baseForward = normalizeVector(baseCameraState.offset);
-      var baseUp = normalizeVector(baseCameraState.up);
-      var baseRight = normalizeVector(cross(baseUp, baseForward));
-      baseUp = normalizeVector(cross(baseForward, baseRight));
-
-      var currentForward = normalizeVector(currentOffset);
-      var currentUpNorm = normalizeVector(currentUp);
-      var currentRight = normalizeVector(cross(currentUpNorm, currentForward));
-      currentUpNorm = normalizeVector(cross(currentForward, currentRight));
-
-      var baseBasis = [
-        [baseRight.x, baseUp.x, baseForward.x],
-        [baseRight.y, baseUp.y, baseForward.y],
-        [baseRight.z, baseUp.z, baseForward.z]
-      ];
-      var currentBasis = [
-        [currentRight.x, currentUpNorm.x, currentForward.x],
-        [currentRight.y, currentUpNorm.y, currentForward.y],
-        [currentRight.z, currentUpNorm.z, currentForward.z]
-      ];
-      var rotation = multiply3(currentBasis, transpose3(baseBasis));
+      var rotation = rotationMatrix3FromDirections(baseCameraState.offset, currentOffset);
       var zoom = baseCameraState.radius / Math.max(camera.radius, 1e-8);
+      var cameraState = currentCameraSyncState();
 
       return {
         zoom: zoom,
@@ -1479,7 +1601,8 @@ HTMLWidgets.widget({
           [rotation[1][0], rotation[1][1], rotation[1][2], 0],
           [rotation[2][0], rotation[2][1], rotation[2][2], 0],
           [0, 0, 0, 1]
-        ]
+        ],
+        camera: cameraState
       };
     }
 
@@ -1585,6 +1708,21 @@ HTMLWidgets.widget({
       }
 
       var view = sceneOptions.view;
+      if (view.camera) {
+        var normalizedCamera = normalizeCameraSyncState(view.camera);
+        if (normalizedCamera) {
+          camera.setTarget(new BABYLON.Vector3(
+            normalizedCamera.target[0],
+            normalizedCamera.target[1],
+            normalizedCamera.target[2]
+          ));
+          camera.alpha = normalizedCamera.alpha;
+          camera.beta = normalizedCamera.beta;
+          camera.radius = normalizedCamera.radius;
+          return;
+        }
+      }
+
       var zoom = Number(view.zoom);
       if (!isFinite(zoom) || zoom <= 0) {
         zoom = 1;
@@ -1691,6 +1829,127 @@ HTMLWidgets.widget({
       return selected || state.targets[0];
     }
 
+    function editorTargetsByKind(state, kind) {
+      if (!state || !state.targets || !state.targets.length) {
+        return [];
+      }
+
+      return state.targets.filter(function(target) {
+        return target.kind === kind;
+      });
+    }
+
+    function cloneScenePostprocesses(effects) {
+      if (!effects) {
+        return [];
+      }
+
+      try {
+        return JSON.parse(JSON.stringify(effects));
+      } catch (err) {
+        return [];
+      }
+    }
+
+    function applyEditorPostProcesses(state) {
+      if (!state) {
+        return;
+      }
+
+      if (!currentSceneOptions) {
+        currentSceneOptions = {};
+      }
+      currentSceneOptions.postprocess = cloneScenePostprocesses(state.postprocess);
+      disposeCollection(managedPipelines);
+      applyScenePostProcesses(currentSceneOptions);
+    }
+
+    function editorTargetMatchesPickedMesh(target, pickedMesh) {
+      if (!target || !pickedMesh) {
+        return false;
+      }
+
+      if (target.helper && pickedMesh === target.helper) {
+        return true;
+      }
+
+      var current = pickedMesh;
+      while (current) {
+        if (current === target.node) {
+          return true;
+        }
+        current = current.parent;
+      }
+
+      return false;
+    }
+
+    function targetSelectionSection(target) {
+      if (!target) {
+        return null;
+      }
+
+      if (target.kind === "light") {
+        return "lights";
+      }
+
+      if (target.kind === "mesh") {
+        return "meshes";
+      }
+
+      return null;
+    }
+
+    function targetLightType(target) {
+      if (!target || target.kind !== "light") {
+        return null;
+      }
+
+      return target.primitive && target.primitive.light_type ? target.primitive.light_type : "hemispheric";
+    }
+
+    function availableEditorModes(target) {
+      if (!target) {
+        return [];
+      }
+
+      if (target.kind === "mesh") {
+        return ["translate", "rotate", "scale"];
+      }
+
+      if (target.kind === "light") {
+        var lightType = targetLightType(target);
+        if (lightType === "point") {
+          return ["translate"];
+        }
+        if (lightType === "spot") {
+          return ["translate", "rotate"];
+        }
+        if (lightType === "directional" || lightType === "hemispheric") {
+          return ["rotate"];
+        }
+      }
+
+      return ["translate"];
+    }
+
+    function ensureEditorMode(state) {
+      if (!state) {
+        return;
+      }
+
+      var target = selectedEditorTarget(state);
+      var modes = availableEditorModes(target);
+      if (!modes.length) {
+        state.gizmoMode = "translate";
+        return;
+      }
+
+      if (modes.indexOf(state.gizmoMode) === -1) {
+        state.gizmoMode = modes[0];
+      }
+    }
+
     function attachEditorTarget(state, target) {
       if (!state || !state.gizmoManager) {
         return;
@@ -1711,15 +1970,22 @@ HTMLWidgets.widget({
         return;
       }
 
+      ensureEditorMode(state);
       var target = selectedEditorTarget(state);
-      var canScale = target && target.kind === "mesh";
-      var visible = state.gizmosVisible !== false && state.gizmoMode !== "orbit";
+      var visible = state.gizmosVisible !== false;
+      var supportedModes = availableEditorModes(target);
+      var canTranslate = !!target && supportedModes.indexOf("translate") !== -1;
+      var canRotate = !!target && supportedModes.indexOf("rotate") !== -1;
+      var canScale = !!target && supportedModes.indexOf("scale") !== -1;
 
       attachEditorTarget(state, visible ? target : null);
-      state.gizmoManager.positionGizmoEnabled = visible && state.gizmoMode === "translate" && !!target;
-      state.gizmoManager.rotationGizmoEnabled = visible && state.gizmoMode === "rotate" && !!target;
+      state.gizmoManager.positionGizmoEnabled = visible && state.gizmoMode === "translate" && canTranslate;
+      state.gizmoManager.rotationGizmoEnabled = visible && state.gizmoMode === "rotate" && canRotate;
       state.gizmoManager.scaleGizmoEnabled = visible && state.gizmoMode === "scale" && canScale;
 
+      if (state.gizmoManager.gizmos && state.gizmoManager.gizmos.positionGizmo && currentSceneBounds && currentSceneBounds.radius) {
+        state.gizmoManager.gizmos.positionGizmo.scaleRatio = Math.max(currentSceneBounds.radius * 0.004, 0.005);
+      }
       if (state.gizmoManager.gizmos && state.gizmoManager.gizmos.scaleGizmo) {
         state.gizmoManager.gizmos.scaleGizmo.uniformScaling = true;
       }
@@ -1731,16 +1997,39 @@ HTMLWidgets.widget({
       }
 
       state.targets.forEach(function(target) {
+        if (target.kind === "light" && target.node) {
+          var lightType = target.primitive && target.primitive.light_type ? target.primitive.light_type : null;
+          if (target.light && target.node.position && target.light.position) {
+            target.light.position.copyFrom(target.node.position);
+            target.primitive.position = vectorToArray(target.node.position);
+          }
+          if (target.light && target.light.direction && lightType !== "point") {
+            var nextDirection = directionFromNode(target.node, target.light.direction);
+            target.light.direction.copyFrom(nextDirection);
+            target.primitive.direction = vectorToArray(nextDirection);
+          }
+        }
         if (target.kind === "light" && target.helper && target.node && target.node.position) {
           target.helper.position.copyFrom(target.node.position);
         }
       });
     }
 
+    function setLightHelperColor(target, value) {
+      if (!target || !target.helper || !target.helper.material) {
+        return;
+      }
+
+      var diffuse = coerceColor3(value, BABYLON.Color3.FromHexString("#f59e0b"));
+      target.helper.material.diffuseColor = diffuse;
+      target.helper.material.emissiveColor = diffuse.scale(0.3);
+    }
+
     function buildSceneEditorPayload(state) {
       var targets = state && state.targets ? state.targets : [];
       return {
         view: currentPar3dState(),
+        postprocess: cloneScenePostprocesses(state.postprocess),
         objects: targets.map(function(target) {
           var entry = {
             index: target.index + 1,
@@ -1754,8 +2043,8 @@ HTMLWidgets.widget({
             if (target.node.position) {
               entry.position = vectorToArray(target.node.position);
             }
-            if (target.node.direction) {
-              entry.direction = vectorToArray(target.node.direction);
+            if (target.light && target.light.direction) {
+              entry.direction = vectorToArray(target.light.direction);
             }
             if (target.primitive.intensity !== undefined) {
               entry.intensity = Number(target.primitive.intensity);
@@ -1805,47 +2094,130 @@ HTMLWidgets.widget({
         uiLayer.style.display = "block";
         uiLayer.innerHTML =
           "<div style='font-weight:700; margin-bottom:6px;'>Scene Editor</div>" +
-          "<div style='margin-bottom:6px; color:#475569;'>Select a mesh or light, edit it with gizmos, then copy or return the saved scene state.</div>" +
-          "<label style='display:block; margin-bottom:4px; color:#334155;'>Target</label>" +
-          "<select data-role='target' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'></select>" +
-          "<div style='display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap;'>" +
-          "<button type='button' data-mode='orbit' style='border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Orbit</button>" +
-          "<button type='button' data-mode='translate' style='border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Move</button>" +
-          "<button type='button' data-mode='rotate' style='border:0; border-radius:6px; background:#334155; color:white; padding:6px 10px; cursor:pointer;'>Rotate</button>" +
-          "<button type='button' data-mode='scale' style='border:0; border-radius:6px; background:#475569; color:white; padding:6px 10px; cursor:pointer;'>Scale</button>" +
-          "</div>" +
-          "<label data-role='intensity-label' style='display:block; margin-bottom:4px; color:#334155;'>Intensity <span data-role='intensity-value'>1</span></label>" +
-          "<input data-role='intensity-slider' type='range' min='0' max='5' step='0.01' value='1' style='width:100%; margin-bottom:8px;' />" +
-          "<button type='button' data-role='toggle-gizmo' style='width:100%; margin-bottom:8px; border:0; border-radius:6px; background:#1d4ed8; color:white; padding:6px 10px; cursor:pointer;'>Hide Gizmo</button>" +
-          "<textarea readonly data-role='state-json' style='width:100%; min-height:160px; resize:vertical; font:inherit; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#f8fafc;'></textarea>" +
-          "<button type='button' data-role='copy-state' style='margin-top:8px; border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Copy JSON</button>";
+          "<div style='margin-bottom:8px; color:#475569;'>Click a mesh or light in the viewport, or select it below, then edit transforms and post-processing settings.</div>" +
+          "<details data-role='section-meshes' open style='margin-bottom:8px;'>" +
+            "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Meshes</summary>" +
+            "<div style='margin-top:8px;'>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Mesh target</label>" +
+              "<select data-role='mesh-target' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'></select>" +
+              "<div style='display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap;'>" +
+                "<button type='button' data-role='mesh-mode' data-mode='translate' style='border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Move</button>" +
+                "<button type='button' data-role='mesh-mode' data-mode='rotate' style='border:0; border-radius:6px; background:#334155; color:white; padding:6px 10px; cursor:pointer;'>Rotate</button>" +
+                "<button type='button' data-role='mesh-mode' data-mode='scale' style='border:0; border-radius:6px; background:#475569; color:white; padding:6px 10px; cursor:pointer;'>Scale</button>" +
+              "</div>" +
+              "<button type='button' data-role='mesh-toggle-gizmo' style='width:100%; border:0; border-radius:6px; background:#1d4ed8; color:white; padding:6px 10px; cursor:pointer;'>Hide Gizmo</button>" +
+            "</div>" +
+          "</details>" +
+          "<details data-role='section-lights' open style='margin-bottom:8px;'>" +
+            "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Lights</summary>" +
+            "<div style='margin-top:8px;'>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Light target</label>" +
+              "<select data-role='light-target' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'></select>" +
+              "<div style='display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap;'>" +
+                "<button type='button' data-role='light-mode' data-mode='translate' style='border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Move</button>" +
+                "<button type='button' data-role='light-mode' data-mode='rotate' style='border:0; border-radius:6px; background:#334155; color:white; padding:6px 10px; cursor:pointer;'>Rotate</button>" +
+              "</div>" +
+              "<label data-role='intensity-label' style='display:block; margin-bottom:4px; color:#334155;'>Intensity <span data-role='intensity-value'>1</span></label>" +
+              "<input data-role='intensity-slider' type='range' min='0' max='5' step='0.01' value='1' style='width:100%; margin-bottom:8px;' />" +
+              "<label data-role='diffuse-label' style='display:block; margin-bottom:4px; color:#334155;'>Diffuse color</label>" +
+              "<input data-role='diffuse-color' type='color' value='#ffffff' style='width:100%; height:36px; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; padding:2px;' />" +
+              "<button type='button' data-role='light-toggle-gizmo' style='width:100%; border:0; border-radius:6px; background:#1d4ed8; color:white; padding:6px 10px; cursor:pointer;'>Hide Gizmo</button>" +
+            "</div>" +
+          "</details>" +
+          "<details data-role='section-effects' open style='margin-bottom:8px;'>" +
+            "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Postprocessing</summary>" +
+            "<div data-role='effects-panel' style='margin-top:8px;'>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Effect</label>" +
+              "<select data-role='effect-target' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'></select>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Focus distance <span data-role='focus-distance-value'></span></label>" +
+              "<input data-role='focus-distance-slider' type='range' min='0' max='1000' step='1' value='0' style='width:100%; margin-bottom:8px;' />" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>f-stop <span data-role='f-stop-value'></span></label>" +
+              "<input data-role='f-stop-slider' type='range' min='0.1' max='22' step='0.1' value='2' style='width:100%; margin-bottom:8px;' />" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Focal length <span data-role='focal-length-value'></span></label>" +
+              "<input data-role='focal-length-slider' type='range' min='1' max='200' step='1' value='50' style='width:100%; margin-bottom:8px;' />" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Blur level</label>" +
+              "<select data-role='blur-level' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
+                "<option value='low'>low</option>" +
+                "<option value='medium'>medium</option>" +
+                "<option value='high'>high</option>" +
+              "</select>" +
+            "</div>" +
+          "</details>" +
+          "<details data-role='section-log' style='margin-bottom:8px;'>" +
+            "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Scene State Log</summary>" +
+            "<div style='margin-top:8px;'>" +
+              "<textarea readonly data-role='state-json' style='width:100%; min-height:160px; resize:vertical; font:inherit; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#f8fafc;'></textarea>" +
+              "<button type='button' data-role='copy-state' style='margin-top:8px; border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Copy JSON</button>" +
+            "</div>" +
+          "</details>";
 
         state.ui = {
-          targetSelect: uiLayer.querySelector("[data-role='target']"),
+          meshSection: uiLayer.querySelector("[data-role='section-meshes']"),
+          lightSection: uiLayer.querySelector("[data-role='section-lights']"),
+          effectsSection: uiLayer.querySelector("[data-role='section-effects']"),
+          logSection: uiLayer.querySelector("[data-role='section-log']"),
+          meshSelect: uiLayer.querySelector("[data-role='mesh-target']"),
+          lightSelect: uiLayer.querySelector("[data-role='light-target']"),
+          effectSelect: uiLayer.querySelector("[data-role='effect-target']"),
           intensityLabel: uiLayer.querySelector("[data-role='intensity-label']"),
           intensityValue: uiLayer.querySelector("[data-role='intensity-value']"),
           intensitySlider: uiLayer.querySelector("[data-role='intensity-slider']"),
-          toggleButton: uiLayer.querySelector("[data-role='toggle-gizmo']"),
+          diffuseLabel: uiLayer.querySelector("[data-role='diffuse-label']"),
+          diffuseColorInput: uiLayer.querySelector("[data-role='diffuse-color']"),
+          meshToggleButton: uiLayer.querySelector("[data-role='mesh-toggle-gizmo']"),
+          lightToggleButton: uiLayer.querySelector("[data-role='light-toggle-gizmo']"),
+          focusDistanceSlider: uiLayer.querySelector("[data-role='focus-distance-slider']"),
+          focusDistanceValue: uiLayer.querySelector("[data-role='focus-distance-value']"),
+          fStopSlider: uiLayer.querySelector("[data-role='f-stop-slider']"),
+          fStopValue: uiLayer.querySelector("[data-role='f-stop-value']"),
+          focalLengthSlider: uiLayer.querySelector("[data-role='focal-length-slider']"),
+          focalLengthValue: uiLayer.querySelector("[data-role='focal-length-value']"),
+          blurLevelSelect: uiLayer.querySelector("[data-role='blur-level']"),
           stateText: uiLayer.querySelector("[data-role='state-json']"),
           copyButton: uiLayer.querySelector("[data-role='copy-state']"),
-          modeButtons: Array.prototype.slice.call(uiLayer.querySelectorAll("[data-mode]"))
+          meshModeButtons: Array.prototype.slice.call(uiLayer.querySelectorAll("[data-role='mesh-mode']")),
+          lightModeButtons: Array.prototype.slice.call(uiLayer.querySelectorAll("[data-role='light-mode']"))
         };
 
-        state.ui.targetSelect.addEventListener("change", function(evt) {
+        state.ui.meshSelect.addEventListener("change", function(evt) {
           state.selectedId = evt.target.value;
+          state.sectionOpen.meshes = true;
           syncEditorGizmoState(state);
           updateSceneEditorPanel(state, buildSceneEditorPayload(state));
         });
 
-        state.ui.modeButtons.forEach(function(button) {
+        state.ui.lightSelect.addEventListener("change", function(evt) {
+          state.selectedId = evt.target.value;
+          state.sectionOpen.lights = true;
+          syncEditorGizmoState(state);
+          updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+        });
+
+        state.ui.meshModeButtons.forEach(function(button) {
           button.addEventListener("click", function() {
             state.gizmoMode = button.getAttribute("data-mode");
+            state.sectionOpen.meshes = true;
             syncEditorGizmoState(state);
             updateSceneEditorPanel(state, buildSceneEditorPayload(state));
           });
         });
 
-        state.ui.toggleButton.addEventListener("click", function() {
+        state.ui.lightModeButtons.forEach(function(button) {
+          button.addEventListener("click", function() {
+            state.gizmoMode = button.getAttribute("data-mode");
+            state.sectionOpen.lights = true;
+            syncEditorGizmoState(state);
+            updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+          });
+        });
+
+        state.ui.meshToggleButton.addEventListener("click", function() {
+          state.gizmosVisible = !state.gizmosVisible;
+          syncEditorGizmoState(state);
+          updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+        });
+
+        state.ui.lightToggleButton.addEventListener("click", function() {
           state.gizmosVisible = !state.gizmosVisible;
           syncEditorGizmoState(state);
           updateSceneEditorPanel(state, buildSceneEditorPayload(state));
@@ -1857,10 +2229,86 @@ HTMLWidgets.widget({
           if (!target || target.kind !== "light" || !isFinite(value)) {
             return;
           }
-          target.node.intensity = value;
+          if (target.light) {
+            target.light.intensity = value;
+          }
           target.primitive.intensity = value;
           state.ui.intensityValue.textContent = value.toFixed(2).replace(/\.?0+$/, "");
           publishSceneEditorState(state);
+        });
+
+        state.ui.diffuseColorInput.addEventListener("input", function(evt) {
+          var target = selectedEditorTarget(state);
+          var value = evt.target.value;
+          if (!target || target.kind !== "light" || typeof value !== "string" || !/^#[0-9a-fA-F]{6}$/.test(value)) {
+            return;
+          }
+          if (target.light) {
+            target.light.diffuse = coerceColor3(value, target.light.diffuse);
+          }
+          target.primitive.diffuse = value;
+          setLightHelperColor(target, value);
+          publishSceneEditorState(state);
+        });
+
+        state.ui.effectSelect.addEventListener("change", function() {
+          updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+        });
+
+        state.ui.focusDistanceSlider.addEventListener("input", function(evt) {
+          var idx = Number(state.ui.effectSelect.value);
+          if (!isFinite(idx) || !state.postprocess[idx]) {
+            return;
+          }
+          state.postprocess[idx].focus_distance = Number(evt.target.value);
+          applyEditorPostProcesses(state);
+          updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+          publishSceneEditorState(state);
+        });
+
+        state.ui.fStopSlider.addEventListener("input", function(evt) {
+          var idx = Number(state.ui.effectSelect.value);
+          if (!isFinite(idx) || !state.postprocess[idx]) {
+            return;
+          }
+          state.postprocess[idx].f_stop = Number(evt.target.value);
+          applyEditorPostProcesses(state);
+          updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+          publishSceneEditorState(state);
+        });
+
+        state.ui.focalLengthSlider.addEventListener("input", function(evt) {
+          var idx = Number(state.ui.effectSelect.value);
+          if (!isFinite(idx) || !state.postprocess[idx]) {
+            return;
+          }
+          state.postprocess[idx].focal_length = Number(evt.target.value);
+          applyEditorPostProcesses(state);
+          updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+          publishSceneEditorState(state);
+        });
+
+        state.ui.blurLevelSelect.addEventListener("change", function(evt) {
+          var idx = Number(state.ui.effectSelect.value);
+          if (!isFinite(idx) || !state.postprocess[idx]) {
+            return;
+          }
+          state.postprocess[idx].blur_level = evt.target.value;
+          applyEditorPostProcesses(state);
+          updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+          publishSceneEditorState(state);
+        });
+
+        [state.ui.meshSection, state.ui.lightSection, state.ui.effectsSection, state.ui.logSection].forEach(function(section) {
+          if (!section) {
+            return;
+          }
+          section.addEventListener("toggle", function() {
+            state.sectionOpen.meshes = !!state.ui.meshSection.open;
+            state.sectionOpen.lights = !!state.ui.lightSection.open;
+            state.sectionOpen.effects = !!state.ui.effectsSection.open;
+            state.sectionOpen.log = !!state.ui.logSection.open;
+          });
         });
 
         bindCopyButton(state.ui.copyButton, function() {
@@ -1870,50 +2318,131 @@ HTMLWidgets.widget({
 
       uiLayer.style.display = "block";
 
-      var select = state.ui.targetSelect;
       var selected = selectedEditorTarget(state);
-      select.innerHTML = "";
-      (state.targets || []).forEach(function(target) {
+      var meshTargets = editorTargetsByKind(state, "mesh");
+      var lightTargets = editorTargetsByKind(state, "light");
+      state.ui.meshSection.open = state.sectionOpen.meshes !== false;
+      state.ui.lightSection.open = state.sectionOpen.lights !== false;
+      state.ui.effectsSection.open = state.sectionOpen.effects !== false;
+      state.ui.logSection.open = state.sectionOpen.log === true;
+
+      state.ui.meshSelect.innerHTML = "";
+      meshTargets.forEach(function(target) {
         var option = document.createElement("option");
         option.value = target.id;
         option.textContent = target.label;
         option.selected = !!selected && target.id === selected.id;
-        select.appendChild(option);
+        state.ui.meshSelect.appendChild(option);
       });
-      if (!state.targets.length) {
+      if (!meshTargets.length) {
         var option = document.createElement("option");
         option.value = "";
-        option.textContent = "No editable meshes or lights";
+        option.textContent = "No editable meshes";
         option.selected = true;
-        select.appendChild(option);
+        state.ui.meshSelect.appendChild(option);
       }
-      select.disabled = !state.targets.length;
 
-      state.ui.modeButtons.forEach(function(button) {
+      state.ui.lightSelect.innerHTML = "";
+      lightTargets.forEach(function(target) {
+        var option = document.createElement("option");
+        option.value = target.id;
+        option.textContent = target.label;
+        option.selected = !!selected && target.id === selected.id;
+        state.ui.lightSelect.appendChild(option);
+      });
+      if (!lightTargets.length) {
+        var option = document.createElement("option");
+        option.value = "";
+        option.textContent = "No editable lights";
+        option.selected = true;
+        state.ui.lightSelect.appendChild(option);
+      }
+
+      state.ui.meshSelect.disabled = !meshTargets.length;
+      state.ui.lightSelect.disabled = !lightTargets.length;
+
+      state.ui.meshModeButtons.forEach(function(button) {
         var mode = button.getAttribute("data-mode");
         var active = mode === state.gizmoMode;
         var disableScale = mode === "scale" && (!selected || selected.kind !== "mesh");
-        button.disabled = disableScale || !state.targets.length;
+        button.disabled = disableScale || !meshTargets.length;
+        button.style.display = "inline-block";
         button.style.opacity = button.disabled ? "0.5" : "1";
-        button.style.background = active ? "#0f172a" : "#475569";
+        button.style.background = active && selected && selected.kind === "mesh" ? "#0f172a" : "#475569";
+      });
+
+      var lightModes = availableEditorModes(selected && selected.kind === "light" ? selected : null);
+      state.ui.lightModeButtons.forEach(function(button) {
+        var mode = button.getAttribute("data-mode");
+        var active = mode === state.gizmoMode;
+        var supported = !selected || selected.kind !== "light" ? true : lightModes.indexOf(mode) !== -1;
+        button.disabled = !lightTargets.length || !supported;
+        button.style.display = supported ? "inline-block" : "none";
+        button.style.opacity = button.disabled ? "0.5" : "1";
+        button.style.background = active && selected && selected.kind === "light" ? "#0f172a" : "#475569";
       });
 
       var showIntensity = !!selected && selected.kind === "light";
       state.ui.intensityLabel.style.display = showIntensity ? "block" : "none";
       state.ui.intensitySlider.style.display = showIntensity ? "block" : "none";
+      state.ui.diffuseLabel.style.display = showIntensity ? "block" : "none";
+      state.ui.diffuseColorInput.style.display = showIntensity ? "block" : "none";
       if (showIntensity) {
-        var intensity = selected.node && selected.node.intensity !== undefined ?
-          Number(selected.node.intensity) :
+        var intensity = selected.light && selected.light.intensity !== undefined ?
+          Number(selected.light.intensity) :
           Number(selected.primitive.intensity || 1);
         if (!isFinite(intensity)) {
           intensity = 1;
         }
         state.ui.intensitySlider.value = String(intensity);
         state.ui.intensityValue.textContent = intensity.toFixed(2).replace(/\.?0+$/, "");
+        state.ui.diffuseColorInput.value = color3ToHex(
+          selected.primitive.diffuse || (selected.light ? selected.light.diffuse : null),
+          "#ffffff"
+        );
       }
 
-      state.ui.toggleButton.disabled = !state.targets.length;
-      state.ui.toggleButton.textContent = state.gizmosVisible === false || state.gizmoMode === "orbit" ? "Show Gizmo" : "Hide Gizmo";
+      var gizmoLabel = state.gizmosVisible === false ? "Show Gizmo" : "Hide Gizmo";
+      state.ui.meshToggleButton.disabled = !meshTargets.length;
+      state.ui.lightToggleButton.disabled = !lightTargets.length;
+      state.ui.meshToggleButton.textContent = gizmoLabel;
+      state.ui.lightToggleButton.textContent = gizmoLabel;
+
+      var effects = state.postprocess || [];
+      state.ui.effectSelect.innerHTML = "";
+      effects.forEach(function(effect, idx) {
+        var option = document.createElement("option");
+        option.value = String(idx);
+        option.textContent = (effect.type || "effect") + " " + (idx + 1);
+        state.ui.effectSelect.appendChild(option);
+      });
+      if (!effects.length) {
+        var option = document.createElement("option");
+        option.value = "";
+        option.textContent = "No postprocess effects";
+        state.ui.effectSelect.appendChild(option);
+      }
+      state.ui.effectSelect.disabled = !effects.length;
+      state.ui.effectsSection.style.display = effects.length ? "block" : "none";
+      if (effects.length) {
+        var effectIndex = Number(state.ui.effectSelect.value);
+        if (!isFinite(effectIndex) || !effects[effectIndex]) {
+          effectIndex = 0;
+          state.ui.effectSelect.value = "0";
+        }
+        var effect = effects[effectIndex];
+        var radius = currentSceneBounds && currentSceneBounds.radius ? currentSceneBounds.radius : 100;
+        var focusMax = Math.max(1000, radius * 10, Number(effect.focus_distance || 0) * 2);
+        state.ui.focusDistanceSlider.max = String(focusMax);
+        state.ui.focusDistanceSlider.value = String(Number(effect.focus_distance || radius));
+        state.ui.focusDistanceValue.textContent = formatRNumber(Number(effect.focus_distance || radius));
+        state.ui.fStopSlider.value = String(Number(effect.f_stop || 2));
+        state.ui.fStopValue.textContent = formatRNumber(Number(effect.f_stop || 2));
+        state.ui.focalLengthSlider.value = String(Number(effect.focal_length || 50));
+        state.ui.focalLengthValue.textContent = formatRNumber(Number(effect.focal_length || 50));
+        state.ui.blurLevelSelect.value = effect.blur_level || "low";
+      }
+
       state.ui.stateText.value = JSON.stringify(payload, null, 2);
     }
 
@@ -2028,7 +2557,7 @@ HTMLWidgets.widget({
             targets: editableTargets || [],
             gizmoManager: null,
             selectedId: editableTargets && editableTargets.length ? editableTargets[0].id : null,
-            gizmoMode: "orbit",
+            gizmoMode: "translate",
             gizmosVisible: false
           };
           publishSceneEditorState(activeInteractionState);
@@ -2041,14 +2570,25 @@ HTMLWidgets.widget({
           mode: interaction.mode,
           widgetId: el.id || null,
           targets: editableTargets || [],
+          postprocess: cloneScenePostprocesses(currentSceneOptions && currentSceneOptions.postprocess ? currentSceneOptions.postprocess : []),
+          sectionOpen: {
+            meshes: true,
+            lights: true,
+            effects: true,
+            log: false
+          },
           helpers: [],
           gizmoManager: gizmoManager,
           selectedId: editableTargets && editableTargets.length ? editableTargets[0].id : null,
-          gizmoMode: "orbit",
+          gizmoMode: "translate",
           gizmosVisible: false,
           dispose: function() {
             clearUiPanel();
             attachEditorTarget(editorState, null);
+            if (editorState.pointerObserver) {
+              scene.onPointerObservable.remove(editorState.pointerObserver);
+              editorState.pointerObserver = null;
+            }
             if (editorState.helpers) {
               editorState.helpers.forEach(function(helper) {
                 if (helper && helper.dispose) {
@@ -2066,9 +2606,40 @@ HTMLWidgets.widget({
           if (target.kind === "light") {
             target.helper = createLightHelper(target.node, target.primitive, target.name || target.id);
             if (target.helper) {
+              target.helper.isPickable = true;
               editorState.helpers.push(target.helper);
             }
           }
+        });
+        editorState.pointerObserver = scene.onPointerObservable.add(function(pointerInfo) {
+          if (!pointerInfo || pointerInfo.type !== BABYLON.PointerEventTypes.POINTERPICK) {
+            return;
+          }
+          var pickInfo = pointerInfo.pickInfo;
+          if (!pickInfo || !pickInfo.hit || !pickInfo.pickedMesh) {
+            return;
+          }
+          if (pickInfo.pickedMesh.name && /gizmo/i.test(pickInfo.pickedMesh.name)) {
+            return;
+          }
+
+          var selectedTarget = null;
+          editorState.targets.forEach(function(target) {
+            if (!selectedTarget && editorTargetMatchesPickedMesh(target, pickInfo.pickedMesh)) {
+              selectedTarget = target;
+            }
+          });
+          if (!selectedTarget) {
+            return;
+          }
+
+          editorState.selectedId = selectedTarget.id;
+          var section = targetSelectionSection(selectedTarget);
+          if (section) {
+            editorState.sectionOpen[section] = true;
+          }
+          syncEditorGizmoState(editorState);
+          updateSceneEditorPanel(editorState, buildSceneEditorPayload(editorState));
         });
         updateLightHelpers(editorState);
 
@@ -2283,12 +2854,12 @@ HTMLWidgets.widget({
       return lineSystem;
     }
 
-    function registerEditableTarget(targets, primitive, index, node, kind, label) {
+    function registerEditableTarget(targets, primitive, index, node, kind, label, extras) {
       if (!targets || !node) {
         return;
       }
 
-      targets.push({
+      var target = {
         id: editorTargetId(index),
         index: index,
         primitiveType: primitive.type,
@@ -2297,7 +2868,15 @@ HTMLWidgets.widget({
         node: node,
         kind: kind,
         label: label || ((primitive.name || (primitive.type + " " + (index + 1))) + " [" + kind + "]")
-      });
+      };
+
+      if (extras) {
+        Object.keys(extras).forEach(function(key) {
+          target[key] = extras[key];
+        });
+      }
+
+      targets.push(target);
     }
 
     function createLight(primitive, name) {
@@ -2309,14 +2888,15 @@ HTMLWidgets.widget({
         lightType === "hemispheric" ? new BABYLON.Vector3(0, 1, 0) : new BABYLON.Vector3(0, -1, 0)
       );
       var light = null;
+      var editorNode = registerNode(new BABYLON.TransformNode(lightName + "-editor", scene));
+      editorNode.position = position.clone();
+      alignNodeForwardToDirection(editorNode, direction);
 
       if (lightType === "point") {
         light = new BABYLON.PointLight(lightName, position, scene);
       } else if (lightType === "directional") {
         light = new BABYLON.DirectionalLight(lightName, direction, scene);
-        if (primitive.position) {
-          light.position = position;
-        }
+        light.position = position.clone();
       } else if (lightType === "spot") {
         light = new BABYLON.SpotLight(
           lightName,
@@ -2361,7 +2941,10 @@ HTMLWidgets.widget({
       }
 
       light.setEnabled(primitive.enabled !== false);
-      return light;
+      return {
+        light: light,
+        editorNode: editorNode
+      };
     }
 
     function alignPlaneToNormal(mesh, normal) {
@@ -2566,6 +3149,7 @@ HTMLWidgets.widget({
 
         clearManagedScene();
         registerSyncGroup(currentSceneOptions && currentSceneOptions.sync ? currentSceneOptions.sync : null);
+        applyScenePostProcesses(currentSceneOptions);
 
         function scheduleFrame() {
           sceneUpdated = true;
@@ -2592,7 +3176,15 @@ HTMLWidgets.widget({
           var name = primitive.type + i;
           if (primitive.type === "light3d") {
             var sceneLight = createLight(primitive, name);
-            registerEditableTarget(editableTargets, primitive, i, sceneLight, "light");
+            registerEditableTarget(
+              editableTargets,
+              primitive,
+              i,
+              sceneLight.editorNode,
+              "light",
+              null,
+              {light: sceneLight.light}
+            );
           } else if (primitive.type === "sphere") {
             var sphere = registerNode(BABYLON.MeshBuilder.CreateSphere(name, {diameter: primitive.diameter}, scene));
             applyTransform(sphere, primitive);

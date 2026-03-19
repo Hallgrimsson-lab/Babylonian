@@ -332,7 +332,15 @@ normalize_material_bindings <- function(x, arg) {
     return(list())
   }
 
-  if (!is.list(x) || is.null(names(x)) || any(!nzchar(names(x)))) {
+  if (!is.list(x)) {
+    stop("`", arg, "` must be a named list.", call. = FALSE)
+  }
+
+  if (!length(x)) {
+    return(list())
+  }
+
+  if (is.null(names(x)) || any(!nzchar(names(x)))) {
     stop("`", arg, "` must be a named list.", call. = FALSE)
   }
 
