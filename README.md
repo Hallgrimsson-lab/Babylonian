@@ -229,6 +229,25 @@ digitize_landmarks(
 The picked landmarks render as small spheres relative to mesh size, and in an
 interactive R session the function returns a 3-column coordinate matrix.
 
+For Geomorph-style workflows, Babylonian also provides `digit.fixed()` as a
+compatibility wrapper:
+
+```r
+digit.fixed(
+  mesh,
+  fixed = 10,
+  index = TRUE,
+  ptsize = 1,
+  center = TRUE
+)
+```
+
+It tries to mimic the core features of Geomorph's implementation by centering
+the specimen by default, snapping picks to the nearest mesh vertex rather than
+an arbitrary point on a triangle, previewing each selection so it can be
+accepted or retried, and optionally returning the selected vertex indices along
+with the landmark coordinates.
+
 To compare two matching-topology meshes, `meshDist()` colors the reference mesh
 by signed vertex displacement and can optionally overlay displacement vectors:
 
