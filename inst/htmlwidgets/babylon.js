@@ -61,6 +61,9 @@ HTMLWidgets.widget({
     uiLayer.style.zIndex = "10";
     uiLayer.style.display = "none";
     uiLayer.style.maxWidth = "280px";
+    uiLayer.style.maxHeight = "calc(100% - 24px)";
+    uiLayer.style.overflowY = "auto";
+    uiLayer.style.overflowX = "hidden";
     uiLayer.style.padding = "10px";
     uiLayer.style.background = "rgba(255,255,255,0.92)";
     uiLayer.style.border = "1px solid rgba(15,23,42,0.12)";
@@ -115,6 +118,8 @@ HTMLWidgets.widget({
     var pendingSyncedCameraState = null;
     var lastAppliedSyncSignature = null;
     var lastBroadcastSyncSignature = null;
+    var activeClippingHelper = null;
+    var lastClippingSignature = null;
 
     function clamp01(x) {
       if (!isFinite(x)) {
@@ -819,6 +824,7 @@ HTMLWidgets.widget({
         material.albedoColor = coerceColor3(resolvedSpec.base_color || resolvedSpec.albedo || "#FFFFFF", new BABYLON.Color3(1, 1, 1));
         material.metallic = resolvedSpec.metallic === undefined ? 0 : Number(resolvedSpec.metallic);
         material.roughness = resolvedSpec.roughness === undefined ? 1 : Number(resolvedSpec.roughness);
+        material.usePhysicalLightFalloff = false;
         if (resolvedSpec.base_color_texture) {
           material.albedoTexture = createTextureFromSpec(resolvedSpec.base_color_texture, "srgb");
         }
@@ -1474,11 +1480,31 @@ HTMLWidgets.widget({
       scaleBarLayer.innerHTML = "";
     }
 
+    function clearClipping() {
+      if (activeClippingHelper && activeClippingHelper.dispose) {
+        activeClippingHelper.dispose();
+      }
+      activeClippingHelper = null;
+      scene.clipPlane = null;
+      scene.clipPlane2 = null;
+      scene.clipPlane3 = null;
+      scene.clipPlane4 = null;
+      scene.clipPlane5 = null;
+      scene.clipPlane6 = null;
+      scene.materials.forEach(function(material) {
+        if (material && Object.prototype.hasOwnProperty.call(material, "clipPlane")) {
+          material.clipPlane = null;
+        }
+      });
+      lastClippingSignature = null;
+    }
+
     function clearManagedScene() {
       initializeInteraction(null, null);
       clearSceneDecorations();
       clearHeatmapLegend();
       clearScaleBar();
+      clearClipping();
       disposeCollection(managedNodes);
       disposeCollection(managedLights);
       disposeCollection(managedShadowGenerators);
@@ -2022,6 +2048,36 @@ HTMLWidgets.widget({
       return selected || state.targets[0];
     }
 
+    function selectedMeshTarget(state) {
+      if (!state || !state.targets || !state.targets.length) {
+        return null;
+      }
+
+      var meshTargets = editorTargetsByKind(state, "mesh");
+      if (!meshTargets.length) {
+        return null;
+      }
+
+      if (state.ui && state.ui.meshSelect && state.ui.meshSelect.value) {
+        var selectedMesh = null;
+        meshTargets.forEach(function(target) {
+          if (target.id === state.ui.meshSelect.value) {
+            selectedMesh = target;
+          }
+        });
+        if (selectedMesh) {
+          return selectedMesh;
+        }
+      }
+
+      var active = selectedEditorTarget(state);
+      if (active && active.kind === "mesh") {
+        return active;
+      }
+
+      return meshTargets[0];
+    }
+
     function editorTargetsByKind(state, kind) {
       if (!state || !state.targets || !state.targets.length) {
         return [];
@@ -2078,6 +2134,88 @@ HTMLWidgets.widget({
         currentSceneOptions = {};
       }
       currentSceneOptions.scale_bar = cloneSceneScaleBar(state.scaleBar);
+    }
+
+    function cloneSceneClipping(spec) {
+      if (!spec) {
+        return null;
+      }
+
+      try {
+        return JSON.parse(JSON.stringify(spec));
+      } catch (err) {
+        return null;
+      }
+    }
+
+    function sceneRuntimeMaterialNames() {
+      var names = {};
+      scene.meshes.forEach(function(mesh) {
+        if (mesh && mesh.material && mesh.material.name) {
+          names[mesh.material.name] = true;
+        }
+      });
+      return Object.keys(names).sort();
+    }
+
+    function selectedMeshRuntimeMaterialName(state) {
+      var target = selectedEditorTarget(state);
+      if (!target || target.kind !== "mesh") {
+        return null;
+      }
+
+      if (target.importedMeshes && target.importedMeshes.length) {
+        for (var i = 0; i < target.importedMeshes.length; i += 1) {
+          if (target.importedMeshes[i] && target.importedMeshes[i].material && target.importedMeshes[i].material.name) {
+            return target.importedMeshes[i].material.name;
+          }
+        }
+      }
+
+      if (target.node && target.node.material && target.node.material.name) {
+        return target.node.material.name;
+      }
+
+      return null;
+    }
+
+    function applySceneClipping(sceneOptions) {
+      var signature = JSON.stringify(sceneOptions && sceneOptions.clipping ? sceneOptions.clipping : null);
+      if (signature === lastClippingSignature) {
+        return;
+      }
+      clearClipping();
+      lastClippingSignature = signature;
+
+      if (!sceneOptions || !sceneOptions.clipping || sceneOptions.clipping.enabled !== true) {
+        return;
+      }
+
+      var materialName = sceneOptions.clipping.material;
+      if (!materialName) {
+        return;
+      }
+
+      var x = Number(sceneOptions.clipping.x);
+      var y = Number(sceneOptions.clipping.y);
+      var z = Number(sceneOptions.clipping.z);
+      var center = currentSceneBounds && currentSceneBounds.center ? currentSceneBounds.center.clone() : BABYLON.Vector3.Zero();
+      var point = new BABYLON.Vector3(isFinite(x) ? x : center.x, isFinite(y) ? y : center.y, isFinite(z) ? z : center.z);
+      scene.clipPlane = new BABYLON.Plane(1, 0, 0, -(isFinite(x) ? x : center.x));
+      scene.clipPlane2 = new BABYLON.Plane(0, 1, 0, -(isFinite(y) ? y : center.y));
+      scene.clipPlane3 = new BABYLON.Plane(0, 0, 1, -(isFinite(z) ? z : center.z));
+
+    }
+
+    function applyEditorClipping(state) {
+      if (!state) {
+        return;
+      }
+
+      if (!currentSceneOptions) {
+        currentSceneOptions = {};
+      }
+      currentSceneOptions.clipping = cloneSceneClipping(state.clipping);
     }
 
     function editorTargetMatchesPickedMesh(target, pickedMesh) {
@@ -2476,6 +2614,7 @@ HTMLWidgets.widget({
         view: currentPar3dState(),
         postprocess: cloneScenePostprocesses(state.postprocess),
         scale_bar: cloneSceneScaleBar(state.scaleBar),
+        clipping: cloneSceneClipping(state.clipping),
         removed_objects: (state.removedObjects || []).map(function(entry) {
           return JSON.parse(JSON.stringify(entry));
         }),
@@ -2558,10 +2697,10 @@ HTMLWidgets.widget({
         uiLayer.style.display = "block";
         uiLayer.innerHTML =
           "<div style='font-weight:700; margin-bottom:6px;'>Scene Editor</div>" +
-          "<div style='margin-bottom:8px; color:#475569;'>Click a mesh or light in the viewport, or select it below, then edit transforms and post-processing settings.</div>" +
+          "<div style='margin-bottom:8px; color:#475569;'>Click a mesh or light in the viewport, or select it below, then edit transforms and other settings.</div>" +
           "<details data-role='section-meshes' style='margin-bottom:8px;'>" +
-            "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Meshes</summary>" +
-            "<div style='margin-top:8px;'>" +
+            "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Meshes</summary>" +
+            "<div style='margin-top:8px; margin-left:10px;'>" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>Mesh target</label>" +
               "<select data-role='mesh-target' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'></select>" +
               "<div style='display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap;'>" +
@@ -2573,8 +2712,8 @@ HTMLWidgets.widget({
             "</div>" +
           "</details>" +
           "<details data-role='section-materials' style='margin-bottom:8px;'>" +
-            "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Materials</summary>" +
-            "<div style='margin-top:8px;'>" +
+            "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Materials</summary>" +
+            "<div style='margin-top:8px; margin-left:10px;'>" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>Library</label>" +
               "<select data-role='material-library' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'></select>" +
               "<div style='display:flex; gap:6px; margin-bottom:8px;'>" +
@@ -2602,8 +2741,8 @@ HTMLWidgets.widget({
             "</div>" +
           "</details>" +
           "<details data-role='section-lights' open style='margin-bottom:8px;'>" +
-            "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Lights</summary>" +
-            "<div style='margin-top:8px;'>" +
+            "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Lights</summary>" +
+            "<div style='margin-top:8px; margin-left:10px;'>" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>Lighting preset</label>" +
               "<div style='display:flex; gap:6px; margin-bottom:8px;'>" +
                 "<select data-role='light-preset' style='flex:1; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
@@ -2644,8 +2783,8 @@ HTMLWidgets.widget({
             "</div>" +
           "</details>" +
           "<details data-role='section-effects' style='margin-bottom:8px;'>" +
-            "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Postprocessing</summary>" +
-            "<div data-role='effects-panel' style='margin-top:8px;'>" +
+            "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Postprocessing</summary>" +
+            "<div data-role='effects-panel' style='margin-top:8px; margin-left:10px;'>" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>New effect</label>" +
               "<select data-role='new-effect-type' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
                 "<option value='depth_of_field'>depth_of_field</option>" +
@@ -2670,9 +2809,23 @@ HTMLWidgets.widget({
               "</select>" +
             "</div>" +
           "</details>" +
+          "<details data-role='section-clipping' style='margin-bottom:8px;'>" +
+            "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Clipping</summary>" +
+            "<div style='margin-top:8px; margin-left:10px;'>" +
+              "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='clipping-enabled' type='checkbox' /> Enable clipping</label>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Material</label>" +
+              "<select data-role='clipping-material' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'></select>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Plane X</label>" +
+              "<input data-role='clipping-x' type='range' min='-1' max='1' step='0.01' value='1' style='width:100%; margin-bottom:8px;' />" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Plane Y</label>" +
+              "<input data-role='clipping-y' type='range' min='-1' max='1' step='0.01' value='0' style='width:100%; margin-bottom:8px;' />" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Plane Z</label>" +
+              "<input data-role='clipping-z' type='range' min='-1' max='1' step='0.01' value='0' style='width:100%; margin-bottom:8px;' />" +
+            "</div>" +
+          "</details>" +
           "<details data-role='section-snapshot' style='margin-bottom:8px;'>" +
-            "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Snapshot</summary>" +
-            "<div style='margin-top:8px;'>" +
+            "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Snapshot</summary>" +
+            "<div style='margin-top:8px; margin-left:10px;'>" +
               "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='scale-bar-enabled' type='checkbox' /> Scale bar</label>" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>Scale bar length</label>" +
               "<input data-role='scale-bar-length' type='number' min='0' step='any' value='1' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;' />" +
@@ -2689,8 +2842,8 @@ HTMLWidgets.widget({
             "</div>" +
           "</details>" +
           "<details data-role='section-log' style='margin-bottom:8px;'>" +
-            "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Scene State Log</summary>" +
-            "<div style='margin-top:8px;'>" +
+            "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Scene State Log</summary>" +
+            "<div style='margin-top:8px; margin-left:10px;'>" +
               "<textarea readonly data-role='state-json' style='width:100%; min-height:160px; resize:vertical; font:inherit; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#f8fafc;'></textarea>" +
               "<button type='button' data-role='copy-state' style='margin-top:8px; border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Copy JSON</button>" +
             "</div>" +
@@ -2701,6 +2854,7 @@ HTMLWidgets.widget({
           materialSection: uiLayer.querySelector("[data-role='section-materials']"),
           lightSection: uiLayer.querySelector("[data-role='section-lights']"),
           effectsSection: uiLayer.querySelector("[data-role='section-effects']"),
+          clippingSection: uiLayer.querySelector("[data-role='section-clipping']"),
           snapshotSection: uiLayer.querySelector("[data-role='section-snapshot']"),
           logSection: uiLayer.querySelector("[data-role='section-log']"),
           meshSelect: uiLayer.querySelector("[data-role='mesh-target']"),
@@ -2754,6 +2908,11 @@ HTMLWidgets.widget({
           focalLengthSlider: uiLayer.querySelector("[data-role='focal-length-slider']"),
           focalLengthValue: uiLayer.querySelector("[data-role='focal-length-value']"),
           blurLevelSelect: uiLayer.querySelector("[data-role='blur-level']"),
+          clippingEnabledInput: uiLayer.querySelector("[data-role='clipping-enabled']"),
+          clippingMaterialSelect: uiLayer.querySelector("[data-role='clipping-material']"),
+          clippingXSlider: uiLayer.querySelector("[data-role='clipping-x']"),
+          clippingYSlider: uiLayer.querySelector("[data-role='clipping-y']"),
+          clippingZSlider: uiLayer.querySelector("[data-role='clipping-z']"),
           stateText: uiLayer.querySelector("[data-role='state-json']"),
           copyButton: uiLayer.querySelector("[data-role='copy-state']"),
           meshModeButtons: Array.prototype.slice.call(uiLayer.querySelectorAll("[data-role='mesh-mode']")),
@@ -2769,8 +2928,8 @@ HTMLWidgets.widget({
         });
 
         function updateSelectedMaterial(mutator) {
-          var target = selectedEditorTarget(state);
-          if (!target || target.kind !== "mesh") {
+          var target = selectedMeshTarget(state);
+          if (!target) {
             return;
           }
           var spec = editableMaterialSpec(target);
@@ -3068,7 +3227,33 @@ HTMLWidgets.widget({
         state.ui.scaleBarEnabledInput.addEventListener("change", updateScaleBarFromInputs);
         state.ui.scaleBarLengthInput.addEventListener("input", updateScaleBarFromInputs);
 
-        [state.ui.meshSection, state.ui.materialSection, state.ui.lightSection, state.ui.effectsSection, state.ui.snapshotSection, state.ui.logSection].forEach(function(section) {
+        function updateClippingFromInputs() {
+          var enabled = !!state.ui.clippingEnabledInput.checked;
+          var material = state.ui.clippingMaterialSelect.value || selectedMeshRuntimeMaterialName(state) || null;
+          var x = Number(state.ui.clippingXSlider.value);
+          var y = Number(state.ui.clippingYSlider.value);
+          var z = Number(state.ui.clippingZSlider.value);
+
+          state.clipping = {
+            enabled: enabled,
+            material: material,
+            x: isFinite(x) ? x : 1,
+            y: isFinite(y) ? y : 0,
+            z: isFinite(z) ? z : 0
+          };
+          state.clippingSelectionMode = "manual";
+          applyEditorClipping(state);
+          updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+          publishSceneEditorState(state);
+        }
+
+        state.ui.clippingEnabledInput.addEventListener("change", updateClippingFromInputs);
+        state.ui.clippingMaterialSelect.addEventListener("change", updateClippingFromInputs);
+        state.ui.clippingXSlider.addEventListener("input", updateClippingFromInputs);
+        state.ui.clippingYSlider.addEventListener("input", updateClippingFromInputs);
+        state.ui.clippingZSlider.addEventListener("input", updateClippingFromInputs);
+
+        [state.ui.meshSection, state.ui.materialSection, state.ui.lightSection, state.ui.effectsSection, state.ui.clippingSection, state.ui.snapshotSection, state.ui.logSection].forEach(function(section) {
           if (!section) {
             return;
           }
@@ -3077,6 +3262,7 @@ HTMLWidgets.widget({
             state.sectionOpen.materials = !!state.ui.materialSection.open;
             state.sectionOpen.lights = !!state.ui.lightSection.open;
             state.sectionOpen.effects = !!state.ui.effectsSection.open;
+            state.sectionOpen.clipping = !!state.ui.clippingSection.open;
             state.sectionOpen.snapshot = !!state.ui.snapshotSection.open;
             state.sectionOpen.log = !!state.ui.logSection.open;
           });
@@ -3096,6 +3282,7 @@ HTMLWidgets.widget({
       state.ui.materialSection.open = state.sectionOpen.materials !== false;
       state.ui.lightSection.open = state.sectionOpen.lights !== false;
       state.ui.effectsSection.open = state.sectionOpen.effects !== false;
+      state.ui.clippingSection.open = state.sectionOpen.clipping === true;
       state.ui.snapshotSection.open = state.sectionOpen.snapshot === true;
       state.ui.logSection.open = state.sectionOpen.log === true;
 
@@ -3203,7 +3390,8 @@ HTMLWidgets.widget({
         state.ui.shadowDarknessSlider.disabled = !shadowSupported || !shadowEnabled;
       }
 
-      var showMaterial = !!selected && selected.kind === "mesh";
+      var materialTarget = selectedMeshTarget(state);
+      var showMaterial = !!materialTarget;
       state.ui.materialTypeSelect.disabled = !showMaterial;
       state.ui.materialLibrarySelect.disabled = !showMaterial || sceneMaterialNames().length === 0;
       state.ui.materialAssignButton.disabled = !showMaterial || sceneMaterialNames().length === 0;
@@ -3217,7 +3405,7 @@ HTMLWidgets.widget({
       state.ui.materialBackfaceInput.disabled = !showMaterial;
       state.ui.materialSection.style.display = meshTargets.length ? "block" : "none";
       if (showMaterial) {
-        var materialSpec = editableMaterialSpec(selected);
+        var materialSpec = editableMaterialSpec(materialTarget);
         var isPbr = materialSpec && materialSpec.type === "pbr";
         state.ui.materialTypeSelect.value = isPbr ? "pbr" : "standard";
         state.ui.materialColorLabel.textContent = isPbr ? "Base color" : "Diffuse color";
@@ -3232,7 +3420,7 @@ HTMLWidgets.widget({
         state.ui.materialWireframeInput.checked = !!materialSpec.wireframe;
         state.ui.materialBackfaceInput.checked = materialSpec.backface_culling !== false;
         if (!state.ui.materialSaveNameInput.value) {
-          state.ui.materialSaveNameInput.value = (selected.name || "material").replace(/\s+/g, "_").toLowerCase();
+          state.ui.materialSaveNameInput.value = (materialTarget.name || "material").replace(/\s+/g, "_").toLowerCase();
         }
       } else {
         state.ui.materialPbrFields.style.display = "none";
@@ -3247,6 +3435,57 @@ HTMLWidgets.widget({
       state.ui.scaleBarEnabledInput.checked = scaleBarSpec.enabled === true;
       state.ui.scaleBarLengthInput.disabled = scaleBarSpec.enabled !== true;
       state.ui.scaleBarLengthInput.value = scaleBarSpec.length !== undefined ? String(Number(scaleBarSpec.length)) : "1";
+
+      var runtimeMaterials = sceneRuntimeMaterialNames();
+      var activeMaterialName = selectedMeshRuntimeMaterialName(state);
+      state.ui.clippingMaterialSelect.innerHTML = "";
+      runtimeMaterials.forEach(function(name) {
+        var option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        state.ui.clippingMaterialSelect.appendChild(option);
+      });
+      if (!runtimeMaterials.length) {
+        var clipOption = document.createElement("option");
+        clipOption.value = "";
+        clipOption.textContent = "No materials";
+        state.ui.clippingMaterialSelect.appendChild(clipOption);
+      }
+      var clippingCenter = currentSceneBounds && currentSceneBounds.center ? currentSceneBounds.center : {x: 0, y: 0, z: 0};
+      var clippingRadius = currentSceneBounds && currentSceneBounds.radius ? currentSceneBounds.radius : 1;
+      var clippingSpec = state.clipping || {
+        enabled: false,
+        x: clippingCenter.x + clippingRadius,
+        y: clippingCenter.y + clippingRadius * 0.5,
+        z: clippingCenter.z + clippingRadius
+      };
+      var selectedMeshId = selected && selected.kind === "mesh" ? selected.id : null;
+      var shouldFollowSelectedMaterial = selectedMeshId && (
+        state.clippingSelectionMode !== "manual" ||
+        state.lastClippingSelectedId !== selectedMeshId
+      );
+      if (shouldFollowSelectedMaterial && activeMaterialName && runtimeMaterials.indexOf(activeMaterialName) !== -1) {
+        clippingSpec.material = activeMaterialName;
+        if (state.clipping) {
+          state.clipping.material = activeMaterialName;
+        }
+        state.clippingSelectionMode = "auto";
+        state.lastClippingSelectedId = selectedMeshId;
+      } else if (clippingSpec.material && runtimeMaterials.indexOf(clippingSpec.material) === -1 && runtimeMaterials.length) {
+        clippingSpec.material = runtimeMaterials[0];
+      }
+      state.ui.clippingEnabledInput.checked = clippingSpec.enabled === true;
+      state.ui.clippingMaterialSelect.value = clippingSpec.material || (runtimeMaterials[0] || "");
+      state.ui.clippingMaterialSelect.disabled = !runtimeMaterials.length;
+      state.ui.clippingXSlider.min = String(clippingCenter.x - clippingRadius);
+      state.ui.clippingXSlider.max = String(clippingCenter.x + clippingRadius);
+      state.ui.clippingYSlider.min = String(clippingCenter.y - clippingRadius);
+      state.ui.clippingYSlider.max = String(clippingCenter.y + clippingRadius);
+      state.ui.clippingZSlider.min = String(clippingCenter.z - clippingRadius);
+      state.ui.clippingZSlider.max = String(clippingCenter.z + clippingRadius);
+      state.ui.clippingXSlider.value = String(clippingSpec.x === undefined ? 1 : Number(clippingSpec.x));
+      state.ui.clippingYSlider.value = String(clippingSpec.y === undefined ? 0 : Number(clippingSpec.y));
+      state.ui.clippingZSlider.value = String(clippingSpec.z === undefined ? 0 : Number(clippingSpec.z));
 
       var effects = state.postprocess || [];
       state.ui.effectSelect.innerHTML = "";
@@ -3390,6 +3629,9 @@ HTMLWidgets.widget({
           if (state.snapshotPreviewRestore.legendDisplay !== undefined) {
             legendLayer.style.display = state.snapshotPreviewRestore.legendDisplay;
           }
+          if (state.snapshotPreviewRestore.scaleBarDisplay !== undefined) {
+            scaleBarLayer.style.display = state.snapshotPreviewRestore.scaleBarDisplay;
+          }
         }
         if (state.helpers && state.helpers.length) {
           state.helpers.forEach(function(helper) {
@@ -3409,11 +3651,13 @@ HTMLWidgets.widget({
 
       state.snapshotPreviewRestore = {
         uiDisplay: uiLayer.style.display,
-        legendDisplay: legendLayer.style.display
+        legendDisplay: legendLayer.style.display,
+        scaleBarDisplay: scaleBarLayer.style.display
       };
 
       uiLayer.style.display = "none";
       legendLayer.style.display = "none";
+      scaleBarLayer.style.display = "none";
 
       if (state.helpers && state.helpers.length) {
         state.helpers.forEach(function(helper) {
@@ -3463,16 +3707,18 @@ HTMLWidgets.widget({
             targets: editableTargets || [],
             postprocess: cloneScenePostprocesses(currentSceneOptions && currentSceneOptions.postprocess ? currentSceneOptions.postprocess : []),
             scaleBar: cloneSceneScaleBar(currentSceneOptions && currentSceneOptions.scale_bar ? currentSceneOptions.scale_bar : null),
+            clipping: cloneSceneClipping(currentSceneOptions && currentSceneOptions.clipping ? currentSceneOptions.clipping : null),
             removedObjects: [],
             gizmoManager: null,
             selectedId: editableTargets && editableTargets.length ? editableTargets[0].id : null,
             gizmoMode: "translate",
-            gizmosVisible: false,
+            gizmosVisible: true,
             sectionOpen: {
               meshes: false,
               materials: false,
               lights: true,
               effects: false,
+              clipping: false,
               snapshot: false,
               log: false
             }
@@ -3489,12 +3735,14 @@ HTMLWidgets.widget({
           targets: editableTargets || [],
           postprocess: cloneScenePostprocesses(currentSceneOptions && currentSceneOptions.postprocess ? currentSceneOptions.postprocess : []),
           scaleBar: cloneSceneScaleBar(currentSceneOptions && currentSceneOptions.scale_bar ? currentSceneOptions.scale_bar : null),
+          clipping: cloneSceneClipping(currentSceneOptions && currentSceneOptions.clipping ? currentSceneOptions.clipping : null),
           removedObjects: [],
           sectionOpen: {
             meshes: false,
             materials: false,
             lights: true,
             effects: false,
+            clipping: false,
             snapshot: false,
             log: false
           },
@@ -3502,7 +3750,7 @@ HTMLWidgets.widget({
           gizmoManager: gizmoManager,
           selectedId: editableTargets && editableTargets.length ? editableTargets[0].id : null,
           gizmoMode: "translate",
-          gizmosVisible: false,
+          gizmosVisible: true,
           dispose: function() {
             clearUiPanel();
             attachEditorTarget(editorState, null);
@@ -3953,9 +4201,9 @@ HTMLWidgets.widget({
     }
 
     function assignLibraryMaterialToSelectedMesh(state, materialName) {
-      var target = selectedEditorTarget(state);
+      var target = selectedMeshTarget(state);
       var materialSpec = sceneMaterialByName(materialName);
-      if (!target || target.kind !== "mesh" || !materialSpec) {
+      if (!target || !materialSpec) {
         return;
       }
 
@@ -3966,8 +4214,8 @@ HTMLWidgets.widget({
     }
 
     function saveSelectedMaterialToLibrary(state, materialName) {
-      var target = selectedEditorTarget(state);
-      if (!target || target.kind !== "mesh" || !materialName) {
+      var target = selectedMeshTarget(state);
+      if (!target || !materialName) {
         return;
       }
 
@@ -4338,9 +4586,9 @@ HTMLWidgets.widget({
         updateAxisLabels();
       }
       renderScaleBar(currentSceneBounds, currentSceneOptions);
+      applySceneClipping(currentSceneOptions);
       if (activeInteractionState && activeInteractionState.mode === "edit_scene3d") {
         updateLightHelpers(activeInteractionState);
-        publishSceneEditorState(activeInteractionState);
       }
     });
 

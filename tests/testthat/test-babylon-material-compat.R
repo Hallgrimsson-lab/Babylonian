@@ -1221,6 +1221,30 @@ testthat::test_that("apply_scene_state preserves scene scale bar settings", {
   testthat::expect_equal(updated$x$scene$scale_bar$length, 5)
 })
 
+testthat::test_that("apply_scene_state preserves scene clipping settings", {
+  mesh <- structure(
+    list(type = "mesh3d", name = "specimen"),
+    class = c("babylon_mesh", "list")
+  )
+  widget <- babylon(data = list(mesh))
+
+  state <- list(
+    clipping = list(
+      enabled = TRUE,
+      material = "specimen-material",
+      x = 1,
+      y = 0,
+      z = 0
+    )
+  )
+
+  updated <- apply_scene_state(widget, state = state)
+
+  testthat::expect_true(updated$x$scene$clipping$enabled)
+  testthat::expect_identical(updated$x$scene$clipping$material, "specimen-material")
+  testthat::expect_equal(updated$x$scene$clipping$x, 1)
+})
+
 testthat::test_that("apply_scene_state preserves exact camera view data when supplied", {
   widget <- babylon(
     data = list(

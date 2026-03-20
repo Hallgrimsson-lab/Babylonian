@@ -252,6 +252,9 @@ apply_scene_state <- function(x = NULL, state = last_scene_state(), ...) {
     if (!is.null(state$scale_bar)) {
       scene_spec$scene$scale_bar <- normalize_scene_scale_bar(state$scale_bar)
     }
+    if (!is.null(state$clipping)) {
+      scene_spec$scene$clipping <- normalize_scene_clipping(state$clipping)
+    }
 
     .babylon_state$current_scene <- scene_spec
     set_last_scene_state(state)
@@ -283,6 +286,9 @@ apply_scene_state <- function(x = NULL, state = last_scene_state(), ...) {
   }
   if (!is.null(state$scale_bar)) {
     widget$x$scene$scale_bar <- normalize_scene_scale_bar(state$scale_bar)
+  }
+  if (!is.null(state$clipping)) {
+    widget$x$scene$clipping <- normalize_scene_clipping(state$clipping)
   }
 
   set_last_scene_state(state)
@@ -424,6 +430,7 @@ scene_state_from_widget <- function(widget) {
     view = scene$view %||% serialize_par3d(.babylon_state$par3d),
     postprocess = scene$postprocess %||% NULL,
     scale_bar = scene$scale_bar %||% NULL,
+    clipping = scene$clipping %||% NULL,
     objects = Filter(
       Negate(is.null),
       lapply(seq_along(objects), function(i) seed_scene_state_entry(objects[[i]], i))
@@ -489,6 +496,7 @@ normalize_scene_state <- function(x) {
     view = NULL,
     postprocess = NULL,
     scale_bar = NULL,
+    clipping = NULL,
     objects = list(),
     removed_objects = list()
   )
@@ -503,6 +511,10 @@ normalize_scene_state <- function(x) {
 
   if (!is.null(x$scale_bar)) {
     state$scale_bar <- normalize_scene_scale_bar(x$scale_bar)
+  }
+
+  if (!is.null(x$clipping)) {
+    state$clipping <- normalize_scene_clipping(x$clipping)
   }
 
   objects <- x$objects %||% list()

@@ -181,6 +181,10 @@ normalize_scene <- function(x) {
     x$scale_bar <- normalize_scene_scale_bar(x$scale_bar)
   }
 
+  if (!is.null(x$clipping)) {
+    x$clipping <- normalize_scene_clipping(x$clipping)
+  }
+
   x$materials <- normalize_scene_material_library(x$materials %||% NULL)
 
   x
@@ -212,6 +216,37 @@ normalize_scene_scale_bar <- function(x) {
 
   if (!is.null(x$label)) {
     out$label <- as.character(x$label[[1]])
+  }
+
+  out
+}
+
+normalize_scene_clipping <- function(x) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+
+  if (isTRUE(x) || isFALSE(x)) {
+    x <- list(enabled = isTRUE(x))
+  }
+
+  if (!is.list(x)) {
+    stop("`clipping` must be `NULL`, `TRUE`/`FALSE`, or a list.", call. = FALSE)
+  }
+
+  out <- list(enabled = isTRUE(x$enabled %||% FALSE))
+
+  if (!is.null(x$material)) {
+    out$material <- as.character(x$material[[1]])
+  }
+
+  for (nm in c("x", "y", "z")) {
+    if (!is.null(x[[nm]])) {
+      if (!is.numeric(x[[nm]]) || length(x[[nm]]) != 1L || !is.finite(x[[nm]][[1]])) {
+        stop("`clipping$", nm, "` must be a finite numeric scalar.", call. = FALSE)
+      }
+      out[[nm]] <- as.numeric(x[[nm]][[1]])
+    }
   }
 
   out

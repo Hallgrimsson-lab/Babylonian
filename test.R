@@ -312,10 +312,10 @@ babylon(
 )
 
 
-# scale bars
 # clip away submeshes/ parts of the scene
 
 #done
+# scale bars
 # shadow opacity
 # - heatmap/meshdist/wireframe
 # - shader support??
