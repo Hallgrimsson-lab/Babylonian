@@ -238,7 +238,9 @@ apply_scene_state <- function(x = NULL, state = last_scene_state(), ...) {
       stop("No active Babylonian scene available. Plot a scene first or pass `x`.", call. = FALSE)
     }
 
-    scene_spec$objects <- apply_scene_state_to_objects(scene_spec$objects, state$objects)
+    edits <- state$objects
+    attr(edits, "removed_objects") <- state$removed_objects %||% list()
+    scene_spec$objects <- apply_scene_state_to_objects(scene_spec$objects, edits)
     scene_spec$scene <- normalize_scene(scene_spec$scene)
     if (!is.null(state$view)) {
       scene_spec$scene$view <- normalize_view(state$view)
@@ -246,6 +248,9 @@ apply_scene_state <- function(x = NULL, state = last_scene_state(), ...) {
     }
     if (!is.null(state$postprocess)) {
       scene_spec$scene$postprocess <- normalize_scene_postprocesses(state$postprocess)
+    }
+    if (!is.null(state$scale_bar)) {
+      scene_spec$scene$scale_bar <- normalize_scene_scale_bar(state$scale_bar)
     }
 
     .babylon_state$current_scene <- scene_spec
@@ -265,7 +270,9 @@ apply_scene_state <- function(x = NULL, state = last_scene_state(), ...) {
     )
   }
 
-  widget$x$objects <- apply_scene_state_to_objects(widget$x$objects, state$objects)
+  edits <- state$objects
+  attr(edits, "removed_objects") <- state$removed_objects %||% list()
+  widget$x$objects <- apply_scene_state_to_objects(widget$x$objects, edits)
   widget$x$scene <- normalize_scene(widget$x$scene)
   if (!is.null(state$view)) {
     widget$x$scene$view <- normalize_view(state$view)
@@ -273,6 +280,9 @@ apply_scene_state <- function(x = NULL, state = last_scene_state(), ...) {
   }
   if (!is.null(state$postprocess)) {
     widget$x$scene$postprocess <- normalize_scene_postprocesses(state$postprocess)
+  }
+  if (!is.null(state$scale_bar)) {
+    widget$x$scene$scale_bar <- normalize_scene_scale_bar(state$scale_bar)
   }
 
   set_last_scene_state(state)
@@ -413,6 +423,7 @@ scene_state_from_widget <- function(widget) {
   list(
     view = scene$view %||% serialize_par3d(.babylon_state$par3d),
     postprocess = scene$postprocess %||% NULL,
+    scale_bar = scene$scale_bar %||% NULL,
     objects = Filter(
       Negate(is.null),
       lapply(seq_along(objects), function(i) seed_scene_state_entry(objects[[i]], i))
@@ -443,7 +454,7 @@ seed_scene_state_entry <- function(object, index) {
     if (!is.null(object$direction)) {
       entry$direction <- normalize_transform_vector(object$direction, "direction")
     }
-    for (nm in c("intensity", "diffuse", "specular", "ground_color", "angle", "exponent", "range", "enabled")) {
+    for (nm in c("intensity", "diffuse", "specular", "ground_color", "angle", "exponent", "range", "enabled", "shadow_enabled", "shadow_darkness")) {
       if (!is.null(object[[nm]])) {
         entry[[nm]] <- object[[nm]]
       }
@@ -477,7 +488,9 @@ normalize_scene_state <- function(x) {
   state <- list(
     view = NULL,
     postprocess = NULL,
-    objects = list()
+    scale_bar = NULL,
+    objects = list(),
+    removed_objects = list()
   )
 
   if (!is.null(x$view)) {
@@ -488,12 +501,24 @@ normalize_scene_state <- function(x) {
     state$postprocess <- normalize_scene_postprocesses(x$postprocess)
   }
 
+  if (!is.null(x$scale_bar)) {
+    state$scale_bar <- normalize_scene_scale_bar(x$scale_bar)
+  }
+
   objects <- x$objects %||% list()
   if (is.data.frame(objects)) {
     objects <- data_frame_rows_to_list(objects)
   }
   if (length(objects)) {
     state$objects <- lapply(objects, normalize_scene_state_entry)
+  }
+
+  removed_objects <- x$removed_objects %||% list()
+  if (is.data.frame(removed_objects)) {
+    removed_objects <- data_frame_rows_to_list(removed_objects)
+  }
+  if (length(removed_objects)) {
+    state$removed_objects <- lapply(removed_objects, normalize_scene_state_lookup)
   }
 
   for (nm in c("selected", "gizmo_mode", "gizmos_visible")) {
@@ -503,6 +528,39 @@ normalize_scene_state <- function(x) {
   }
 
   state
+}
+
+normalize_scene_state_lookup <- function(x) {
+  if (is.data.frame(x)) {
+    x <- data_frame_rows_to_list(x)
+    if (length(x) != 1L) {
+      stop("Each removed scene-state entry must describe exactly one object.", call. = FALSE)
+    }
+    x <- x[[1]]
+  }
+
+  if (!is.list(x)) {
+    stop("Each removed scene-state entry must be a list.", call. = FALSE)
+  }
+
+  entry <- list(index = as.integer(x$index[[1]]))
+  if (!is.finite(entry$index) || entry$index < 1L) {
+    stop("Removed scene-state object indices must be positive integers.", call. = FALSE)
+  }
+
+  if (!is.null(x$name)) {
+    entry$name <- as.character(x$name[[1]])
+  }
+
+  if (!is.null(x$primitive_type)) {
+    entry$primitive_type <- as.character(x$primitive_type[[1]])
+  }
+
+  if (!is.null(x$node_type)) {
+    entry$node_type <- as.character(x$node_type[[1]])
+  }
+
+  entry
 }
 
 normalize_scene_state_entry <- function(x) {
@@ -546,7 +604,7 @@ normalize_scene_state_entry <- function(x) {
     entry$light_type <- as.character(x$light_type[[1]])
   }
 
-  for (nm in c("intensity", "angle", "exponent", "range")) {
+  for (nm in c("intensity", "angle", "exponent", "range", "shadow_darkness")) {
     if (!is.null(x[[nm]])) {
       entry[[nm]] <- as.numeric(x[[nm]][[1]])
     }
@@ -564,6 +622,10 @@ normalize_scene_state_entry <- function(x) {
 
   if (!is.null(x$enabled)) {
     entry$enabled <- isTRUE(x$enabled)
+  }
+
+  if (!is.null(x$shadow_enabled)) {
+    entry$shadow_enabled <- isTRUE(x$shadow_enabled)
   }
 
   if (!is.null(x$created_in_editor)) {
@@ -593,11 +655,22 @@ data_frame_rows_to_list <- function(x) {
 }
 
 apply_scene_state_to_objects <- function(objects, edits) {
-  if (!length(edits)) {
+  removed <- attr(edits, "removed_objects", exact = TRUE) %||% list()
+
+  if (!length(edits) && !length(removed)) {
     return(objects)
   }
 
   edited <- objects
+  if (length(removed)) {
+    removal_order <- order(vapply(removed, function(entry) as.integer(entry$index[[1]]), integer(1)), decreasing = TRUE)
+    for (entry in removed[removal_order]) {
+      idx <- locate_scene_state_object(edited, entry)
+      if (!is.na(idx)) {
+        edited[[idx]] <- NULL
+      }
+    }
+  }
   for (entry in edits) {
     idx <- locate_scene_state_object(edited, entry)
     if (is.na(idx)) {
@@ -643,7 +716,7 @@ apply_scene_state_entry <- function(object, entry) {
     object$direction <- normalize_transform_vector(entry$direction, "direction")
   }
 
-  for (nm in c("intensity", "angle", "exponent", "range", "enabled", "light_type")) {
+  for (nm in c("intensity", "angle", "exponent", "range", "enabled", "light_type", "shadow_enabled", "shadow_darkness")) {
     if (!is.null(entry[[nm]])) {
       object[[nm]] <- entry[[nm]]
     }
@@ -677,6 +750,8 @@ create_scene_object_from_state <- function(entry) {
       angle = entry$angle %||% NULL,
       exponent = entry$exponent %||% NULL,
       range = entry$range %||% NULL,
+      shadow_enabled = entry$shadow_enabled %||% NULL,
+      shadow_darkness = entry$shadow_darkness %||% NULL,
       name = entry$name %||% NULL,
       enabled = entry$enabled %||% TRUE
     ))
@@ -997,7 +1072,7 @@ run_scene_editor_gadget <- function(widget) {
     shiny::observeEvent(input$done, {
       state <- current_scene_state_input(input[[scene_state_input]], fallback = initial_state)
       set_last_scene_state(state)
-      shiny::stopApp(state)
+      shiny::stopApp(TRUE)
     })
 
     shiny::observeEvent(input$cancel, {
@@ -1014,6 +1089,10 @@ run_scene_editor_gadget <- function(widget) {
 
   if (is.null(result)) {
     return(invisible(NULL))
+  }
+
+  if (isTRUE(result)) {
+    result <- last_scene_state()
   }
 
   set_last_scene_state(result)

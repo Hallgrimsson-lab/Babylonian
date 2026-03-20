@@ -64,6 +64,13 @@ plot3d(your_morpho_mesh)
 last_par3d()
 ```
 
+You can also add a canned studio-lighting rig directly from R with the same preset names used by `edit_scene3d()`:
+
+``` r
+plot3d(your_morpho_mesh, color = "gray75")
+lighting_preset3d("three_point", x = your_morpho_mesh)
+```
+
 To save a static screenshot of the current scene, use `snapshot3d()` or the aliases `rgl.snapshot()` and `snapshot()`:
 
 ``` r

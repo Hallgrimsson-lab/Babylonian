@@ -177,9 +177,44 @@ normalize_scene <- function(x) {
     x$postprocess <- normalize_scene_postprocesses(x$postprocess)
   }
 
+  if (!is.null(x$scale_bar)) {
+    x$scale_bar <- normalize_scene_scale_bar(x$scale_bar)
+  }
+
   x$materials <- normalize_scene_material_library(x$materials %||% NULL)
 
   x
+}
+
+normalize_scene_scale_bar <- function(x) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+
+  if (isTRUE(x) || isFALSE(x)) {
+    x <- list(enabled = isTRUE(x))
+  }
+
+  if (!is.list(x)) {
+    stop("`scale_bar` must be `NULL`, `TRUE`/`FALSE`, or a list.", call. = FALSE)
+  }
+
+  out <- list(
+    enabled = isTRUE(x$enabled %||% FALSE)
+  )
+
+  if (!is.null(x$length)) {
+    if (!is.numeric(x$length) || length(x$length) != 1L || !is.finite(x$length[[1]]) || x$length[[1]] <= 0) {
+      stop("`scale_bar$length` must be a positive numeric scalar.", call. = FALSE)
+    }
+    out$length <- as.numeric(x$length[[1]])
+  }
+
+  if (!is.null(x$label)) {
+    out$label <- as.character(x$label[[1]])
+  }
+
+  out
 }
 
 current_scene_spec <- function() {

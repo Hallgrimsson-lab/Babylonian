@@ -84,6 +84,42 @@ function applyView(camera, payload) {
   }
 }
 
+function emitHostEvent(elementId, eventName, value) {
+  const payload = {
+    source: "babylonian",
+    widgetId: elementId || null,
+    event: eventName,
+    value,
+  };
+
+  try {
+    window.dispatchEvent(new CustomEvent("babylonian-host-event", { detail: payload }));
+  } catch (err) {}
+
+  try {
+    if (window.parent && window.parent !== window && typeof window.parent.postMessage === "function") {
+      window.parent.postMessage(payload, "*");
+    }
+  } catch (err) {}
+}
+
+function currentPar3dState(camera, payload) {
+  const target = camera.getTarget();
+  const bg = payload && payload.scene && payload.scene.view && payload.scene.view.bg
+    ? payload.scene.view.bg
+    : "#FAFAFA";
+  return {
+    zoom: camera.radius > 0 ? 8 / camera.radius : 0.05,
+    bg,
+    camera: {
+      alpha: camera.alpha,
+      beta: camera.beta,
+      radius: camera.radius,
+      target: [target.x, target.y, target.z],
+    },
+  };
+}
+
 function renderAxes(scene, payload, radius) {
   if (!payload.scene || payload.scene.axes === false) {
     return;
@@ -282,10 +318,24 @@ function buildScene(el, payload, width, height, elementId) {
   }
 
   applyView(camera, payload);
+  let publishViewStateHandle = null;
+  const scheduleHostStatePublish = () => {
+    if (publishViewStateHandle !== null) {
+      return;
+    }
+    publishViewStateHandle = window.requestAnimationFrame(() => {
+      publishViewStateHandle = null;
+      emitHostEvent(elementId, "par3d", currentPar3dState(camera, payload));
+    });
+  };
+  camera.onViewMatrixChangedObservable.add(() => {
+    scheduleHostStatePublish();
+  });
   engine.resize();
   engine.runRenderLoop(() => {
     scene.render();
   });
+  scheduleHostStatePublish();
 
   const onResize = () => engine.resize();
   window.addEventListener("resize", onResize);

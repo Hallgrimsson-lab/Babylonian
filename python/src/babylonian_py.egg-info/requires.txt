@@ -4,5 +4,8 @@ traitlets>=5.0
 [notebook]
 ipython>=8.0
 
+[shiny]
+shiny>=0.7.0
+
 [trimesh]
 trimesh>=4.0

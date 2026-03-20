@@ -234,6 +234,54 @@ def _widget_html(scene: BabylonScene, width: int, height: int, element_id: str) 
       camera.radius = Math.max(8 / Number(view.zoom), 0.01);
     }}
   }}
+  function emitHostEvent(eventName, value) {{
+    var payload = {{
+      source: "babylonian",
+      widgetId: {json.dumps(element_id)},
+      event: eventName,
+      value: value
+    }};
+    try {{
+      window.dispatchEvent(new CustomEvent("babylonian-host-event", {{ detail: payload }}));
+    }} catch (err) {{}}
+    try {{
+      if (window.parent && window.parent !== window && typeof window.parent.postMessage === "function") {{
+        window.parent.postMessage(payload, "*");
+      }}
+    }} catch (err) {{}}
+  }}
+  function currentPar3dState() {{
+    var target = camera.getTarget();
+    return {{
+      zoom: camera.radius > 0 ? 8 / camera.radius : 0.05,
+      bg: bg,
+      camera: {{
+        alpha: camera.alpha,
+        beta: camera.beta,
+        radius: camera.radius,
+        target: [target.x, target.y, target.z]
+      }}
+    }};
+  }}
+  function currentSceneState() {{
+    var nextPayload = JSON.parse(JSON.stringify(payload || {{}}));
+    if (!nextPayload.scene) {{
+      nextPayload.scene = {{}};
+    }}
+    nextPayload.scene.view = currentPar3dState();
+    return nextPayload;
+  }}
+  var publishViewStateHandle = null;
+  function scheduleHostStatePublish() {{
+    if (publishViewStateHandle !== null) {{
+      return;
+    }}
+    publishViewStateHandle = window.requestAnimationFrame(function() {{
+      publishViewStateHandle = null;
+      emitHostEvent("par3d", currentPar3dState());
+      emitHostEvent("scene_state", currentSceneState());
+    }});
+  }}
   function renderAxes(radius) {{
     if (!payload.scene || payload.scene.axes === false) return;
     var size = Math.max(radius * 1.25, 1);
@@ -340,9 +388,13 @@ def _widget_html(scene: BabylonScene, width: int, height: int, element_id: str) 
     renderAxes(1);
   }}
   applyView(payload.scene ? payload.scene.view : null);
+  camera.onViewMatrixChangedObservable.add(function() {{
+    scheduleHostStatePublish();
+  }});
   engine.resize();
   engine.runRenderLoop(function() {{ scene.render(); }});
   window.addEventListener("resize", function() {{ engine.resize(); }});
+  scheduleHostStatePublish();
 }})();
 </script>
 """

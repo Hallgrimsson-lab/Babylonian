@@ -68,6 +68,47 @@ testthat::test_that("scene editor state carries and reapplies post-process setti
   testthat::expect_identical(updated$x$scene$postprocess[[1]]$blur_level, "high")
 })
 
+testthat::test_that("scene editor removals persist when scene state is reapplied", {
+  widget <- babylon(
+    data = list(
+      as_babylon_points(matrix(c(0, 0, 0), ncol = 3)),
+      as_babylon_light(type = "point", name = "key_light", position = c(1, 1, 1))
+    )
+  )
+
+  state <- scene_state_from_widget(widget)
+  state$removed_objects <- list(list(index = 2L, primitive_type = "light3d", node_type = "light", name = "key_light"))
+  state$objects <- state$objects[vapply(state$objects, function(entry) !identical(entry$name %||% NULL, "key_light"), logical(1))]
+
+  updated <- apply_scene_state(widget, state = state)
+
+  testthat::expect_false(any(vapply(updated$x$objects, function(object) identical(object$name %||% NULL, "key_light"), logical(1))))
+})
+
+testthat::test_that("lighting_preset3d adds named preset rigs", {
+  clear_scene3d()
+
+  mesh3d_obj <- structure(
+    list(
+      vb = rbind(
+        c(-1, 1, 0),
+        c(-1, -1, 0),
+        c(0, 0, 2),
+        c(1, 1, 1)
+      ),
+      it = matrix(c(1, 2, 3), nrow = 3)
+    ),
+    class = "mesh3d"
+  )
+
+  widget <- lighting_preset3d("three_point", x = mesh3d_obj, add = FALSE)
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_length(widget$x$objects, 3L)
+  testthat::expect_true(all(vapply(widget$x$objects, function(object) identical(object$type, "light3d"), logical(1))))
+  testthat::expect_identical(vapply(widget$x$objects, `[[`, character(1), "name"), c("three_point_key", "three_point_fill", "three_point_rim"))
+})
+
 testthat::test_that("numeric palette indices normalize using the active palette", {
   value <- normalize_babylon_color(2)
   testthat::expect_type(value, "character")
@@ -1125,6 +1166,59 @@ testthat::test_that("apply_scene_state updates meshes, lights, and view state", 
   testthat::expect_equal(updated$x$scene$view$zoom, 1.5)
   testthat::expect_identical(updated$x$scene$view$bg, "#445566")
   testthat::expect_equal(last_scene_state()$objects[[1]]$position, c(1, 2, 3))
+})
+
+testthat::test_that("apply_scene_state preserves editor shadow settings on lights", {
+  mesh <- structure(
+    list(
+      type = "mesh3d",
+      name = "specimen"
+    ),
+    class = c("babylon_mesh", "list")
+  )
+  key <- create_babylon_light(
+    type = "directional",
+    name = "key",
+    direction = c(0, -1, 0),
+    intensity = 0.5
+  )
+
+  widget <- babylon(data = list(mesh, key))
+  state <- list(
+    objects = list(
+      list(
+        index = 2,
+        name = "key",
+        shadow_enabled = TRUE,
+        shadow_darkness = 0.35
+      )
+    )
+  )
+
+  updated <- apply_scene_state(widget, state = state)
+
+  testthat::expect_true(updated$x$objects[[2]]$shadow_enabled)
+  testthat::expect_equal(updated$x$objects[[2]]$shadow_darkness, 0.35)
+})
+
+testthat::test_that("apply_scene_state preserves scene scale bar settings", {
+  mesh <- structure(
+    list(type = "mesh3d", name = "specimen"),
+    class = c("babylon_mesh", "list")
+  )
+  widget <- babylon(data = list(mesh))
+
+  state <- list(
+    scale_bar = list(
+      enabled = TRUE,
+      length = 5
+    )
+  )
+
+  updated <- apply_scene_state(widget, state = state)
+
+  testthat::expect_true(updated$x$scene$scale_bar$enabled)
+  testthat::expect_equal(updated$x$scene$scale_bar$length, 5)
 })
 
 testthat::test_that("apply_scene_state preserves exact camera view data when supplied", {

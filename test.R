@@ -104,20 +104,12 @@ light3d_directional(
 # scene editing/gizmos
 testscene <- babylon(
   data = list(
-    as_babylon_mesh(mesh, color = "gray75"),
-    as_babylon_light(
-      type = "directional",
-      name = "key",
-      direction = c(-0.5, -1, 0.2),
-      intensity = 0.9,
-      diffuse = "#fff7cc",
-      specular = "#ffffff"
-    )
+    as_babylon_mesh(mesh, color = "gray75")
   )
 )
 
-mesh$vb[-4,] <- mesh$vb[-4,]/10
-testscene <- plot3d(mesh)
+# mesh$vb[-4,] <- mesh$vb[-4,]/10
+register_material3d("bronze", pbr_material3d(base_color = "#CD7F32", metallic = 0.6, roughness = 0.4))
 
 state <- edit_scene3d(testscene)
 scene <- apply_scene_state(scene, state = state)
@@ -320,9 +312,11 @@ babylon(
 )
 
 
-
+# scale bars
+# clip away submeshes/ parts of the scene
 
 #done
+# shadow opacity
 # - heatmap/meshdist/wireframe
 # - shader support??
 # - movies
@@ -330,13 +324,24 @@ babylon(
 # - digitize parity
 # - gizmo support on lights and meshes: hard to use
 # - camera focus sharpness and other postprocessing
-
-# scale bars
-# lighting portrait presets
 # add lights & postprpcessoing effects in gui
 # material support, adding in gui
 # take the picture now in gui
 # tif support
 # svg support
-# shadow opacity
-# clip away submeshes/ parts of the scene
+# lighting portrait presets
+
+testscene <- babylon(
+  data = list(
+    as_babylon_mesh(mesh, color = "gray75")
+  )
+)
+
+# mesh$vb[-4,] <- mesh$vb[-4,]/10
+register_material3d("bronze", pbr_material3d(base_color = "#CD7F32", metallic = 0.6, roughness = 0.4))
+
+state <- edit_scene3d(testscene)
+scene <- apply_scene_state(scene, state = state)
+scene
+snapshot3d("figure.png", widget = scene)
+

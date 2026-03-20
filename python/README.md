@@ -8,6 +8,7 @@ This directory contains an early Python adapter for Babylonian's shared scene sc
 pip install -e ./python
 pip install anywidget traitlets
 pip install trimesh
+pip install shiny
 ```
 
 ## Quick Start
@@ -27,6 +28,47 @@ By default it uses an iframe-backed HTML renderer, which is more reliable in VS 
 plot3d(mesh, color="#d97706", renderer="anywidget")
 ```
 
+## Shiny For Python
+
+There is now a first Shiny for Python host adapter that uses the same scene payloads and a browser-message relay for scene events:
+
+```python
+from shiny import App, render, ui
+import trimesh
+
+from babylonian import scene_input_value, shiny_scene3d
+
+mesh = trimesh.load("specimen.obj", force="mesh")
+
+app_ui = ui.page_fluid(
+    shiny_scene3d("specimen_scene", mesh, color="#d97706"),
+    ui.output_text_verbatim("camera_state"),
+)
+
+def server(input, output, session):
+    @output
+    @render.text
+    def camera_state():
+        return str(scene_input_value(input, "specimen_scene", "par3d", default={}))
+
+app = App(app_ui, server)
+```
+
+Save that as `app.py` and run it from a terminal:
+
+```bash
+shiny run --reload app.py
+```
+
+Running `app.run()` directly inside a Jupyter or VS Code notebook usually fails with `asyncio.run() cannot be called from a running event loop`, because the notebook already owns the event loop.
+
+This is a first transport-oriented port:
+
+- the scene renders inside a Shiny for Python app
+- camera/view updates are relayed back as inputs like `specimen_scene_par3d`
+- the full `edit_scene3d()` editor has not been ported yet
+- the relay protocol is now browser-native, which is the seam we can reuse for a fuller Python editor later
+
 ## Current Scope
 
 - `scene3d()`
@@ -42,6 +84,7 @@ The first in-memory mesh adapter assumes `trimesh.Trimesh`. Raw `(vertices, face
 This first pass is intentionally small:
 
 - notebook/HTML rendering is implemented
+- Shiny for Python scene hosting is implemented
 - the scene schema is shared-friendly
 - imported `glb/gltf` assets are not wired up in Python yet
 - interactive editing wrappers are not wired up in Python yet

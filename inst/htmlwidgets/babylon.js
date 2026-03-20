@@ -51,6 +51,7 @@ HTMLWidgets.widget({
     var managedMaterials = [];
     var managedTextures = [];
     var managedLights = [];
+    var managedShadowGenerators = [];
     var managedPipelines = [];
 
     var uiLayer = document.createElement("div");
@@ -86,6 +87,14 @@ HTMLWidgets.widget({
     legendLayer.style.lineHeight = "1.4";
     legendLayer.style.pointerEvents = "none";
     el.appendChild(legendLayer);
+    var scaleBarLayer = document.createElement("div");
+    scaleBarLayer.style.position = "absolute";
+    scaleBarLayer.style.right = "12px";
+    scaleBarLayer.style.bottom = "12px";
+    scaleBarLayer.style.zIndex = "9";
+    scaleBarLayer.style.display = "none";
+    scaleBarLayer.style.pointerEvents = "none";
+    el.appendChild(scaleBarLayer);
     var labelLayer = document.createElement("div");
     labelLayer.style.position = "absolute";
     labelLayer.style.inset = "0";
@@ -135,6 +144,10 @@ HTMLWidgets.widget({
 
     function registerLight(light) {
       return registerDisposable(managedLights, light);
+    }
+
+    function registerShadowGenerator(generator) {
+      return registerDisposable(managedShadowGenerators, generator);
     }
 
     function registerPipeline(pipeline) {
@@ -288,6 +301,41 @@ HTMLWidgets.widget({
       }
 
       return false;
+    }
+
+    function emitHostEvent(eventName, value, widgetId) {
+      var payload = {
+        source: "babylonian",
+        widgetId: widgetId || el.id || null,
+        event: eventName,
+        value: value
+      };
+
+      try {
+        el.dispatchEvent(new CustomEvent("babylonian:" + eventName, {
+          bubbles: true,
+          detail: payload
+        }));
+      } catch (err) {}
+
+      try {
+        window.dispatchEvent(new CustomEvent("babylonian-host-event", {
+          detail: payload
+        }));
+      } catch (err) {}
+
+      try {
+        if (window.parent && window.parent !== window && typeof window.parent.postMessage === "function") {
+          window.parent.postMessage(payload, "*");
+        }
+      } catch (err) {}
+
+      if (payload.widgetId) {
+        pushShinyInputValue(
+          payload.widgetId + "_" + eventName,
+          value
+        );
+      }
     }
 
     function isHexColor(value) {
@@ -1123,6 +1171,101 @@ HTMLWidgets.widget({
       return helper;
     }
 
+    function shadowCapableLightType(lightType) {
+      return lightType === "point" || lightType === "spot" || lightType === "directional";
+    }
+
+    function sceneShadowMeshes() {
+      return scene.meshes.filter(function(mesh) {
+        if (!mesh || !mesh.getTotalVertices || mesh.getTotalVertices() <= 0) {
+          return false;
+        }
+        if (mesh.metadata && mesh.metadata.babylonianHelper) {
+          return false;
+        }
+        if (mesh.name && /gizmo/i.test(mesh.name)) {
+          return false;
+        }
+        return true;
+      });
+    }
+
+    function refreshShadowReceivers() {
+      var hasShadows = false;
+      managedLights.forEach(function(light) {
+        if (light && light._babylonianShadowGenerator && light._babylonianShadowEnabled) {
+          hasShadows = true;
+        }
+      });
+
+      sceneShadowMeshes().forEach(function(mesh) {
+        mesh.receiveShadows = hasShadows;
+      });
+    }
+
+    function configureLightShadows(target) {
+      if (!target || target.kind !== "light" || !target.light || !target.primitive) {
+        return;
+      }
+
+      var lightType = target.primitive.light_type || "hemispheric";
+      var enabled = target.primitive.shadow_enabled === true;
+      var darkness = target.primitive.shadow_darkness === undefined ? 0.5 : Number(target.primitive.shadow_darkness);
+      if (!isFinite(darkness)) {
+        darkness = 0.5;
+      }
+      darkness = Math.min(1, Math.max(0, darkness));
+      target.primitive.shadow_darkness = darkness;
+
+      if (!shadowCapableLightType(lightType)) {
+        enabled = false;
+        target.primitive.shadow_enabled = false;
+      }
+
+      if (!enabled) {
+        if (target.light._babylonianShadowGenerator && target.light._babylonianShadowGenerator.dispose) {
+          var generator = target.light._babylonianShadowGenerator;
+          managedShadowGenerators = managedShadowGenerators.filter(function(entry) {
+            return entry !== generator;
+          });
+          generator.dispose();
+        }
+        target.light._babylonianShadowGenerator = null;
+        target.light._babylonianShadowEnabled = false;
+        refreshShadowReceivers();
+        return;
+      }
+
+      var generatorInstance = target.light._babylonianShadowGenerator;
+      if (!generatorInstance) {
+        try {
+          generatorInstance = registerShadowGenerator(new BABYLON.ShadowGenerator(1024, target.light));
+          generatorInstance.usePercentageCloserFiltering = true;
+        } catch (err) {
+          target.primitive.shadow_enabled = false;
+          target.light._babylonianShadowGenerator = null;
+          target.light._babylonianShadowEnabled = false;
+          refreshShadowReceivers();
+          return;
+        }
+        target.light._babylonianShadowGenerator = generatorInstance;
+      }
+
+      if (generatorInstance.setDarkness) {
+        generatorInstance.setDarkness(darkness);
+      } else {
+        generatorInstance.darkness = darkness;
+      }
+
+      sceneShadowMeshes().forEach(function(mesh) {
+        if (generatorInstance.addShadowCaster) {
+          generatorInstance.addShadowCaster(mesh, true);
+        }
+        mesh.receiveShadows = true;
+      });
+      target.light._babylonianShadowEnabled = true;
+    }
+
     function createPointBillboard(position, color, alpha, size, name) {
       var plane = registerNode(BABYLON.MeshBuilder.CreatePlane(name, {size: size}, scene));
       plane.position = position.clone();
@@ -1326,12 +1469,19 @@ HTMLWidgets.widget({
       legendLayer.innerHTML = "";
     }
 
+    function clearScaleBar() {
+      scaleBarLayer.style.display = "none";
+      scaleBarLayer.innerHTML = "";
+    }
+
     function clearManagedScene() {
       initializeInteraction(null, null);
       clearSceneDecorations();
       clearHeatmapLegend();
+      clearScaleBar();
       disposeCollection(managedNodes);
       disposeCollection(managedLights);
+      disposeCollection(managedShadowGenerators);
       disposeCollection(managedMaterials);
       disposeCollection(managedTextures);
       disposeCollection(managedPipelines);
@@ -1907,6 +2057,29 @@ HTMLWidgets.widget({
       applyScenePostProcesses(currentSceneOptions);
     }
 
+    function cloneSceneScaleBar(spec) {
+      if (!spec) {
+        return null;
+      }
+
+      try {
+        return JSON.parse(JSON.stringify(spec));
+      } catch (err) {
+        return null;
+      }
+    }
+
+    function applyEditorScaleBar(state) {
+      if (!state) {
+        return;
+      }
+
+      if (!currentSceneOptions) {
+        currentSceneOptions = {};
+      }
+      currentSceneOptions.scale_bar = cloneSceneScaleBar(state.scaleBar);
+    }
+
     function editorTargetMatchesPickedMesh(target, pickedMesh) {
       if (!target || !pickedMesh) {
         return false;
@@ -2040,7 +2213,7 @@ HTMLWidgets.widget({
       }
 
       state.targets.forEach(function(target) {
-        if (target.kind === "light" && target.node) {
+      if (target.kind === "light" && target.node) {
           var lightType = target.primitive && target.primitive.light_type ? target.primitive.light_type : null;
           if (target.light && target.node.position && target.light.position) {
             target.light.position.copyFrom(target.node.position);
@@ -2051,6 +2224,7 @@ HTMLWidgets.widget({
             target.light.direction.copyFrom(nextDirection);
             target.primitive.direction = vectorToArray(nextDirection);
           }
+          configureLightShadows(target);
         }
         if (target.kind === "light" && target.helper && target.node && target.node.position) {
           target.helper.position.copyFrom(target.node.position);
@@ -2068,30 +2242,34 @@ HTMLWidgets.widget({
       target.helper.material.emissiveColor = diffuse.scale(0.3);
     }
 
-    function addEditorLight(state, lightType) {
+    function addEditorLight(state, lightType, definition) {
       if (!state) {
         return;
       }
 
       var index = nextEditorTargetIndex(state);
-      var position = defaultEditorLightPosition();
+      var seed = definition || {};
+      var position = coerceVector3(seed.position, defaultEditorLightPosition());
       var primitive = {
         type: "light3d",
-        light_type: lightType || "point",
-        name: uniqueEditorPrimitiveName(state, (lightType || "light") + "_light"),
+        light_type: seed.type || lightType || "point",
+        name: uniqueEditorPrimitiveName(state, seed.name || ((lightType || "light") + "_light")),
         position: vectorToArray(position),
-        direction: defaultEditorLightDirection(lightType || "point"),
-        intensity: 1,
-        diffuse: "#ffffff",
-        specular: "#ffffff",
-        enabled: true
+        direction: seed.direction || defaultEditorLightDirection(seed.type || lightType || "point"),
+        intensity: seed.intensity === undefined ? 1 : Number(seed.intensity),
+        diffuse: seed.diffuse || "#ffffff",
+        specular: seed.specular || "#ffffff",
+        enabled: seed.enabled === undefined ? true : seed.enabled !== false,
+        shadow_enabled: seed.shadow_enabled === true,
+        shadow_darkness: seed.shadow_darkness === undefined ? 0.5 : Number(seed.shadow_darkness)
       };
 
       if (primitive.light_type === "spot") {
-        primitive.angle = Math.PI / 3;
-        primitive.exponent = 1;
+        primitive.angle = seed.angle === undefined ? Math.PI / 3 : Number(seed.angle);
+        primitive.exponent = seed.exponent === undefined ? 1 : Number(seed.exponent);
       }
 
+      setDefaultLightsEnabled(false);
       var created = createLight(primitive, primitive.name);
       registerEditableTarget(
         state.targets,
@@ -2123,6 +2301,7 @@ HTMLWidgets.widget({
         return;
       }
 
+      recordRemovedEditorTarget(state, selected);
       state.targets = state.targets.filter(function(target) {
         return target.id !== selected.id;
       });
@@ -2132,9 +2311,39 @@ HTMLWidgets.widget({
         });
       }
       disposeEditorTarget(selected);
+      if (!editorTargetsByKind(state, "light").length) {
+        setDefaultLightsEnabled(true);
+      }
       var fallback = selectedEditorTarget(state) || (state.targets.length ? state.targets[0] : null);
       selectEditorTarget(state, fallback ? fallback.id : null);
       publishSceneEditorState(state);
+    }
+
+    function recordRemovedEditorTarget(state, target) {
+      if (!state || !target || target.createdInEditor) {
+        return;
+      }
+
+      if (!state.removedObjects) {
+        state.removedObjects = [];
+      }
+
+      var entry = {
+        index: (target.index || 0) + 1,
+        primitive_type: target.primitiveType || (target.primitive ? target.primitive.type : null),
+        node_type: target.kind || null
+      };
+
+      if (target.name) {
+        entry.name = target.name;
+      }
+
+      var alreadyPresent = state.removedObjects.some(function(item) {
+        return (entry.name && item.name === entry.name) || item.index === entry.index;
+      });
+      if (!alreadyPresent) {
+        state.removedObjects.push(entry);
+      }
     }
 
     function addEditorPostprocess(state, type) {
@@ -2178,11 +2387,98 @@ HTMLWidgets.widget({
       publishSceneEditorState(state);
     }
 
+    function directionTowardCenter(position) {
+      var center = currentSceneBounds && currentSceneBounds.center ? currentSceneBounds.center : BABYLON.Vector3.Zero();
+      return vectorToArray(center.subtract(position));
+    }
+
+    function lightingPresetDefinitions(presetName) {
+      var radius = currentSceneBounds && currentSceneBounds.radius ? currentSceneBounds.radius : 1;
+      var center = currentSceneBounds && currentSceneBounds.center ? currentSceneBounds.center : new BABYLON.Vector3(0, 0, 0);
+      var preset = (presetName || "three_point").toLowerCase();
+
+      function at(x, y, z) {
+        return center.add(new BABYLON.Vector3(x * radius, y * radius, z * radius));
+      }
+
+      if (preset === "rembrandt") {
+        var rembrandtKey = at(0.9, 1.1, 1.0);
+        var rembrandtFill = at(-0.9, 0.35, 0.9);
+        var rembrandtRim = at(0.2, 0.9, -1.2);
+        return [
+          {type: "spot", name: "rembrandt_key", position: vectorToArray(rembrandtKey), direction: directionTowardCenter(rembrandtKey), intensity: 1.2, diffuse: "#FFF4DD", specular: "#FFFFFF", angle: Math.PI / 3, exponent: 1},
+          {type: "point", name: "rembrandt_fill", position: vectorToArray(rembrandtFill), intensity: 0.35, diffuse: "#DCEBFF", specular: "#FFFFFF"},
+          {type: "point", name: "rembrandt_rim", position: vectorToArray(rembrandtRim), intensity: 0.55, diffuse: "#FFFFFF", specular: "#FFFFFF"}
+        ];
+      }
+
+      if (preset === "butterfly") {
+        var butterflyKey = at(0, 1.35, 1.1);
+        var butterflyFill = at(0, -0.25, 1.0);
+        var butterflyRim = at(0, 0.7, -1.1);
+        return [
+          {type: "spot", name: "butterfly_key", position: vectorToArray(butterflyKey), direction: directionTowardCenter(butterflyKey), intensity: 1.25, diffuse: "#FFF4DD", specular: "#FFFFFF", angle: Math.PI / 3, exponent: 1},
+          {type: "point", name: "butterfly_fill", position: vectorToArray(butterflyFill), intensity: 0.3, diffuse: "#FFFFFF", specular: "#FFFFFF"},
+          {type: "point", name: "butterfly_rim", position: vectorToArray(butterflyRim), intensity: 0.4, diffuse: "#EEF2FF", specular: "#FFFFFF"}
+        ];
+      }
+
+      if (preset === "split") {
+        var splitKey = at(1.2, 0.4, 0.9);
+        var splitRim = at(-1.0, 0.8, -1.0);
+        return [
+          {type: "spot", name: "split_key", position: vectorToArray(splitKey), direction: directionTowardCenter(splitKey), intensity: 1.15, diffuse: "#FFF4DD", specular: "#FFFFFF", angle: Math.PI / 3, exponent: 1},
+          {type: "point", name: "split_rim", position: vectorToArray(splitRim), intensity: 0.25, diffuse: "#DCEBFF", specular: "#FFFFFF"}
+        ];
+      }
+
+      var key = at(1.0, 1.0, 1.1);
+      var fill = at(-1.1, 0.5, 0.9);
+      var rim = at(0.1, 0.9, -1.3);
+      return [
+        {type: "spot", name: "three_point_key", position: vectorToArray(key), direction: directionTowardCenter(key), intensity: 1.2, diffuse: "#FFF4DD", specular: "#FFFFFF", angle: Math.PI / 3, exponent: 1},
+        {type: "point", name: "three_point_fill", position: vectorToArray(fill), intensity: 0.45, diffuse: "#DCEBFF", specular: "#FFFFFF"},
+        {type: "point", name: "three_point_rim", position: vectorToArray(rim), intensity: 0.65, diffuse: "#FFFFFF", specular: "#FFFFFF"}
+      ];
+    }
+
+    function applyLightingPreset(state, presetName) {
+      if (!state) {
+        return;
+      }
+
+      var existingLights = editorTargetsByKind(state, "light").slice();
+      existingLights.forEach(function(target) {
+        recordRemovedEditorTarget(state, target);
+        disposeEditorTarget(target);
+      });
+      state.targets = (state.targets || []).filter(function(target) {
+        return target.kind !== "light";
+      });
+      state.helpers = [];
+
+      var definitions = lightingPresetDefinitions(presetName);
+      setDefaultLightsEnabled(false);
+      definitions.forEach(function(definition) {
+        addEditorLight(state, definition.type, definition);
+      });
+      if (editorTargetsByKind(state, "light").length) {
+        selectEditorTarget(state, editorTargetsByKind(state, "light")[0].id);
+      } else {
+        selectEditorTarget(state, null);
+      }
+      publishSceneEditorState(state);
+    }
+
     function buildSceneEditorPayload(state) {
       var targets = state && state.targets ? state.targets : [];
       return {
         view: currentPar3dState(),
         postprocess: cloneScenePostprocesses(state.postprocess),
+        scale_bar: cloneSceneScaleBar(state.scaleBar),
+        removed_objects: (state.removedObjects || []).map(function(entry) {
+          return JSON.parse(JSON.stringify(entry));
+        }),
         objects: targets.map(function(target) {
           var entry = {
             index: target.index + 1,
@@ -2219,6 +2515,12 @@ HTMLWidgets.widget({
             }
             if (target.primitive.range !== undefined) {
               entry.range = Number(target.primitive.range);
+            }
+            if (target.primitive.shadow_enabled !== undefined) {
+              entry.shadow_enabled = target.primitive.shadow_enabled === true;
+            }
+            if (target.primitive.shadow_darkness !== undefined) {
+              entry.shadow_darkness = Number(target.primitive.shadow_darkness);
             }
             if (target.primitive.enabled !== undefined) {
               entry.enabled = target.primitive.enabled !== false;
@@ -2302,6 +2604,16 @@ HTMLWidgets.widget({
           "<details data-role='section-lights' open style='margin-bottom:8px;'>" +
             "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Lights</summary>" +
             "<div style='margin-top:8px;'>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Lighting preset</label>" +
+              "<div style='display:flex; gap:6px; margin-bottom:8px;'>" +
+                "<select data-role='light-preset' style='flex:1; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
+                  "<option value='three_point'>three_point</option>" +
+                  "<option value='rembrandt'>rembrandt</option>" +
+                  "<option value='butterfly'>butterfly</option>" +
+                  "<option value='split'>split</option>" +
+                "</select>" +
+                "<button type='button' data-role='light-apply-preset' style='border:0; border-radius:6px; background:#7c3aed; color:white; padding:6px 10px; cursor:pointer;'>Apply</button>" +
+              "</div>" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>New light type</label>" +
               "<select data-role='new-light-type' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
                 "<option value='point'>point</option>" +
@@ -2323,6 +2635,11 @@ HTMLWidgets.widget({
               "<input data-role='intensity-slider' type='range' min='0' max='5' step='0.01' value='1' style='width:100%; margin-bottom:8px;' />" +
               "<label data-role='diffuse-label' style='display:block; margin-bottom:4px; color:#334155;'>Diffuse color</label>" +
               "<input data-role='diffuse-color' type='color' value='#ffffff' style='width:100%; height:36px; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; padding:2px;' />" +
+              "<div data-role='shadow-fields' style='margin-bottom:8px;'>" +
+                "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='shadow-enabled' type='checkbox' /> Shadows</label>" +
+                "<label data-role='shadow-darkness-label' style='display:block; margin-bottom:4px; color:#334155;'>Shadow darkness <span data-role='shadow-darkness-value'>0.5</span></label>" +
+                "<input data-role='shadow-darkness-slider' type='range' min='0' max='1' step='0.01' value='0.5' style='width:100%; margin-bottom:8px;' />" +
+              "</div>" +
               "<button type='button' data-role='light-toggle-gizmo' style='width:100%; border:0; border-radius:6px; background:#1d4ed8; color:white; padding:6px 10px; cursor:pointer;'>Hide Gizmo</button>" +
             "</div>" +
           "</details>" +
@@ -2356,6 +2673,9 @@ HTMLWidgets.widget({
           "<details data-role='section-snapshot' style='margin-bottom:8px;'>" +
             "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Snapshot</summary>" +
             "<div style='margin-top:8px;'>" +
+              "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='scale-bar-enabled' type='checkbox' /> Scale bar</label>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Scale bar length</label>" +
+              "<input data-role='scale-bar-length' type='number' min='0' step='any' value='1' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;' />" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>Filename</label>" +
               "<input data-role='snapshot-filename' type='text' value='scene.png' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;' />" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>Format</label>" +
@@ -2401,6 +2721,8 @@ HTMLWidgets.widget({
           materialWireframeInput: uiLayer.querySelector("[data-role='material-wireframe']"),
           materialBackfaceInput: uiLayer.querySelector("[data-role='material-backface']"),
           lightSelect: uiLayer.querySelector("[data-role='light-target']"),
+          lightPresetSelect: uiLayer.querySelector("[data-role='light-preset']"),
+          lightPresetButton: uiLayer.querySelector("[data-role='light-apply-preset']"),
           newLightTypeSelect: uiLayer.querySelector("[data-role='new-light-type']"),
           lightAddButton: uiLayer.querySelector("[data-role='light-add']"),
           lightRemoveButton: uiLayer.querySelector("[data-role='light-remove']"),
@@ -2413,8 +2735,15 @@ HTMLWidgets.widget({
           intensitySlider: uiLayer.querySelector("[data-role='intensity-slider']"),
           diffuseLabel: uiLayer.querySelector("[data-role='diffuse-label']"),
           diffuseColorInput: uiLayer.querySelector("[data-role='diffuse-color']"),
+          shadowFields: uiLayer.querySelector("[data-role='shadow-fields']"),
+          shadowEnabledInput: uiLayer.querySelector("[data-role='shadow-enabled']"),
+          shadowDarknessLabel: uiLayer.querySelector("[data-role='shadow-darkness-label']"),
+          shadowDarknessValue: uiLayer.querySelector("[data-role='shadow-darkness-value']"),
+          shadowDarknessSlider: uiLayer.querySelector("[data-role='shadow-darkness-slider']"),
           meshToggleButton: uiLayer.querySelector("[data-role='mesh-toggle-gizmo']"),
           lightToggleButton: uiLayer.querySelector("[data-role='light-toggle-gizmo']"),
+          scaleBarEnabledInput: uiLayer.querySelector("[data-role='scale-bar-enabled']"),
+          scaleBarLengthInput: uiLayer.querySelector("[data-role='scale-bar-length']"),
           snapshotFilenameInput: uiLayer.querySelector("[data-role='snapshot-filename']"),
           snapshotFormatSelect: uiLayer.querySelector("[data-role='snapshot-format']"),
           snapshotSaveButton: uiLayer.querySelector("[data-role='snapshot-save']"),
@@ -2544,6 +2873,11 @@ HTMLWidgets.widget({
           addEditorLight(state, state.ui.newLightTypeSelect.value || "point");
         });
 
+        state.ui.lightPresetButton.addEventListener("click", function() {
+          state.sectionOpen.lights = true;
+          applyLightingPreset(state, state.ui.lightPresetSelect.value || "three_point");
+        });
+
         state.ui.lightRemoveButton.addEventListener("click", function() {
           removeSelectedEditorLight(state);
         });
@@ -2603,6 +2937,29 @@ HTMLWidgets.widget({
           }
           target.primitive.diffuse = value;
           setLightHelperColor(target, value);
+          publishSceneEditorState(state);
+        });
+
+        state.ui.shadowEnabledInput.addEventListener("change", function(evt) {
+          var target = selectedEditorTarget(state);
+          if (!target || target.kind !== "light") {
+            return;
+          }
+          target.primitive.shadow_enabled = !!evt.target.checked;
+          configureLightShadows(target);
+          updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+          publishSceneEditorState(state);
+        });
+
+        state.ui.shadowDarknessSlider.addEventListener("input", function(evt) {
+          var target = selectedEditorTarget(state);
+          var value = Number(evt.target.value);
+          if (!target || target.kind !== "light" || !isFinite(value)) {
+            return;
+          }
+          target.primitive.shadow_darkness = value;
+          configureLightShadows(target);
+          state.ui.shadowDarknessValue.textContent = value.toFixed(2).replace(/\.?0+$/, "");
           publishSceneEditorState(state);
         });
 
@@ -2668,14 +3025,15 @@ HTMLWidgets.widget({
             return;
           }
           setSnapshotPreviewVisible(state, false);
-          pushShinyInputValue(
-            state.widgetId + "_snapshot_request",
+          emitHostEvent(
+            "snapshot_request",
             {
               filename: state.ui.snapshotFilenameInput.value || "scene.png",
               format: state.ui.snapshotFormatSelect.value || "png",
               vwidth: engine.getRenderWidth ? engine.getRenderWidth() : canvas.width,
               vheight: engine.getRenderHeight ? engine.getRenderHeight() : canvas.height
-            }
+            },
+            state.widgetId
           );
         });
 
@@ -2688,6 +3046,27 @@ HTMLWidgets.widget({
             state.ui.snapshotFilenameInput.value = current + "." + format;
           }
         });
+
+        function updateScaleBarFromInputs() {
+          var enabled = !!state.ui.scaleBarEnabledInput.checked;
+          var length = Number(state.ui.scaleBarLengthInput.value);
+          if (!enabled) {
+            state.scaleBar = {enabled: false};
+          } else if (isFinite(length) && length > 0) {
+            state.scaleBar = {
+              enabled: true,
+              length: length
+            };
+          } else {
+            return;
+          }
+          applyEditorScaleBar(state);
+          updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+          publishSceneEditorState(state);
+        }
+
+        state.ui.scaleBarEnabledInput.addEventListener("change", updateScaleBarFromInputs);
+        state.ui.scaleBarLengthInput.addEventListener("input", updateScaleBarFromInputs);
 
         [state.ui.meshSection, state.ui.materialSection, state.ui.lightSection, state.ui.effectsSection, state.ui.snapshotSection, state.ui.logSection].forEach(function(section) {
           if (!section) {
@@ -2795,6 +3174,7 @@ HTMLWidgets.widget({
       state.ui.intensitySlider.style.display = showIntensity ? "block" : "none";
       state.ui.diffuseLabel.style.display = showIntensity ? "block" : "none";
       state.ui.diffuseColorInput.style.display = showIntensity ? "block" : "none";
+      state.ui.shadowFields.style.display = "none";
       if (showIntensity) {
         var intensity = selected.light && selected.light.intensity !== undefined ?
           Number(selected.light.intensity) :
@@ -2808,6 +3188,19 @@ HTMLWidgets.widget({
           selected.primitive.diffuse || (selected.light ? selected.light.diffuse : null),
           "#ffffff"
         );
+
+        var shadowSupported = shadowCapableLightType(targetLightType(selected));
+        var shadowEnabled = shadowSupported && selected.primitive.shadow_enabled === true;
+        var shadowDarkness = selected.primitive.shadow_darkness === undefined ? 0.5 : Number(selected.primitive.shadow_darkness);
+        if (!isFinite(shadowDarkness)) {
+          shadowDarkness = 0.5;
+        }
+        state.ui.shadowFields.style.display = shadowSupported ? "block" : "none";
+        state.ui.shadowEnabledInput.checked = shadowEnabled;
+        state.ui.shadowEnabledInput.disabled = !shadowSupported;
+        state.ui.shadowDarknessSlider.value = String(shadowDarkness);
+        state.ui.shadowDarknessValue.textContent = shadowDarkness.toFixed(2).replace(/\.?0+$/, "");
+        state.ui.shadowDarknessSlider.disabled = !shadowSupported || !shadowEnabled;
       }
 
       var showMaterial = !!selected && selected.kind === "mesh";
@@ -2850,6 +3243,10 @@ HTMLWidgets.widget({
       state.ui.lightToggleButton.disabled = !lightTargets.length;
       state.ui.meshToggleButton.textContent = gizmoLabel;
       state.ui.lightToggleButton.textContent = gizmoLabel;
+      var scaleBarSpec = state.scaleBar || {enabled: false};
+      state.ui.scaleBarEnabledInput.checked = scaleBarSpec.enabled === true;
+      state.ui.scaleBarLengthInput.disabled = scaleBarSpec.enabled !== true;
+      state.ui.scaleBarLengthInput.value = scaleBarSpec.length !== undefined ? String(Number(scaleBarSpec.length)) : "1";
 
       var effects = state.postprocess || [];
       state.ui.effectSelect.innerHTML = "";
@@ -2915,18 +3312,18 @@ HTMLWidgets.widget({
 
       state.lastPublishedText = text;
 
-      if (state.widgetId) {
-        if (payload.view) {
-          pushShinyInputValue(
-            state.widgetId + "_par3d",
-            JSON.stringify(payload.view)
-          );
-        }
-        pushShinyInputValue(
-          state.widgetId + "_scene_state",
-          text
+      if (payload.view) {
+        emitHostEvent(
+          "par3d",
+          JSON.stringify(payload.view),
+          state.widgetId
         );
       }
+      emitHostEvent(
+        "scene_state",
+        text,
+        state.widgetId
+      );
     }
 
     function publishPoseState(state) {
@@ -2941,12 +3338,11 @@ HTMLWidgets.widget({
 
       updatePosePanel(state, payload);
 
-      if (state.widgetId) {
-        pushShinyInputValue(
-          state.widgetId + "_par3d",
-          JSON.stringify(payload)
-        );
-      }
+      emitHostEvent(
+        "par3d",
+        JSON.stringify(payload),
+        state.widgetId
+      );
     }
 
     function schedulePoseStatePublish() {
@@ -2974,12 +3370,11 @@ HTMLWidgets.widget({
 
       updateDigitizePanel(state);
 
-      if (state.widgetId) {
-        pushShinyInputValue(
-          state.widgetId + "_landmarks",
-          JSON.stringify(state.points)
-        );
-      }
+      emitHostEvent(
+        "landmarks",
+        JSON.stringify(state.points),
+        state.widgetId
+      );
     }
 
     function setSnapshotPreviewVisible(state, visible) {
@@ -3067,6 +3462,8 @@ HTMLWidgets.widget({
             widgetId: el.id || null,
             targets: editableTargets || [],
             postprocess: cloneScenePostprocesses(currentSceneOptions && currentSceneOptions.postprocess ? currentSceneOptions.postprocess : []),
+            scaleBar: cloneSceneScaleBar(currentSceneOptions && currentSceneOptions.scale_bar ? currentSceneOptions.scale_bar : null),
+            removedObjects: [],
             gizmoManager: null,
             selectedId: editableTargets && editableTargets.length ? editableTargets[0].id : null,
             gizmoMode: "translate",
@@ -3091,6 +3488,8 @@ HTMLWidgets.widget({
           widgetId: el.id || null,
           targets: editableTargets || [],
           postprocess: cloneScenePostprocesses(currentSceneOptions && currentSceneOptions.postprocess ? currentSceneOptions.postprocess : []),
+          scaleBar: cloneSceneScaleBar(currentSceneOptions && currentSceneOptions.scale_bar ? currentSceneOptions.scale_bar : null),
+          removedObjects: [],
           sectionOpen: {
             meshes: false,
             materials: false,
@@ -3131,6 +3530,7 @@ HTMLWidgets.widget({
               target.helper.isPickable = true;
               editorState.helpers.push(target.helper);
             }
+            configureLightShadows(target);
           }
         });
         editorState.pointerObserver = scene.onPointerObservable.add(function(pointerInfo) {
@@ -3585,12 +3985,13 @@ HTMLWidgets.widget({
       currentSceneOptions.materials[materialName] = cloneMaterialSpec(materialSpec);
 
       if (state.widgetId) {
-        pushShinyInputValue(
-          state.widgetId + "_material_library_save",
+        emitHostEvent(
+          "material_library_save",
           {
             name: materialName,
             material: cloneMaterialSpec(materialSpec)
-          }
+          },
+          state.widgetId
         );
       }
 
@@ -3708,10 +4109,14 @@ HTMLWidgets.widget({
       }
 
       light.setEnabled(primitive.enabled !== false);
-      return {
+      var result = {
         light: light,
         editorNode: editorNode
       };
+      if (shadowCapableLightType(lightType)) {
+        result.shadowGenerator = null;
+      }
+      return result;
     }
 
     function alignPlaneToNormal(mesh, normal) {
@@ -3788,6 +4193,56 @@ HTMLWidgets.widget({
         item.element.style.left = projected.x + "px";
         item.element.style.top = projected.y + "px";
       });
+    }
+
+    function renderScaleBar(bounds, sceneOptions) {
+      clearScaleBar();
+
+      if (!bounds || !sceneOptions || !sceneOptions.scale_bar || sceneOptions.scale_bar.enabled !== true) {
+        return;
+      }
+
+      var length = Number(sceneOptions.scale_bar.length);
+      if (!isFinite(length) || length <= 0) {
+        return;
+      }
+
+      var center = bounds.center.clone();
+      var cameraTarget = camera.getTarget ? camera.getTarget() : center.clone();
+      var forward = normalizeVector(cameraTarget.subtract(camera.position));
+      var right = cross(forward, camera.upVector || new BABYLON.Vector3(0, 1, 0));
+      if (right.lengthSquared && right.lengthSquared() <= 1e-12) {
+        right = new BABYLON.Vector3(1, 0, 0);
+      }
+      right = normalizeVector(right);
+      var halfOffset = right.scale(length / 2);
+      var leftPoint = center.subtract(halfOffset);
+      var rightPoint = center.add(halfOffset);
+
+      var viewport = camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
+      var projectedLeft = BABYLON.Vector3.Project(leftPoint, BABYLON.Matrix.Identity(), scene.getTransformMatrix(), viewport);
+      var projectedRight = BABYLON.Vector3.Project(rightPoint, BABYLON.Matrix.Identity(), scene.getTransformMatrix(), viewport);
+      var pixelLength = Math.sqrt(
+        Math.pow(projectedRight.x - projectedLeft.x, 2) +
+        Math.pow(projectedRight.y - projectedLeft.y, 2)
+      );
+
+      if (!isFinite(pixelLength) || pixelLength <= 1) {
+        return;
+      }
+
+      var label = sceneOptions.scale_bar.label || formatRNumber(length);
+      var width = Math.max(1, Math.round(pixelLength));
+      scaleBarLayer.style.display = "block";
+      scaleBarLayer.innerHTML =
+        "<div style='padding:8px 10px; background:rgba(255,255,255,0.92); border:1px solid rgba(15,23,42,0.12); border-radius:8px; box-shadow:0 10px 30px rgba(15,23,42,0.12); color:#0f172a; font-family:Menlo, Monaco, Consolas, monospace; font-size:12px; line-height:1.2;'>" +
+          "<svg width='" + (width + 2) + "' height='18' viewBox='0 0 " + (width + 2) + " 18' aria-hidden='true'>" +
+            "<line x1='1' y1='13' x2='" + (width + 1) + "' y2='13' stroke='#0f172a' stroke-width='2' />" +
+            "<line x1='1' y1='7' x2='1' y2='16' stroke='#0f172a' stroke-width='2' />" +
+            "<line x1='" + (width + 1) + "' y1='7' x2='" + (width + 1) + "' y2='16' stroke='#0f172a' stroke-width='2' />" +
+          "</svg>" +
+          "<div style='margin-top:4px; text-align:center;'>" + label + "</div>" +
+        "</div>";
     }
 
     function renderAxes(bounds, sceneOptions) {
@@ -3882,6 +4337,7 @@ HTMLWidgets.widget({
       if (axisLabelState.length) {
         updateAxisLabels();
       }
+      renderScaleBar(currentSceneBounds, currentSceneOptions);
       if (activeInteractionState && activeInteractionState.mode === "edit_scene3d") {
         updateLightHelpers(activeInteractionState);
         publishSceneEditorState(activeInteractionState);
@@ -3892,6 +4348,7 @@ HTMLWidgets.widget({
     window.addEventListener("resize", function () {
       engine.resize();
       updateAxisLabels();
+      renderScaleBar(currentSceneBounds, currentSceneOptions);
       schedulePoseStatePublish();
     });
     camera.onViewMatrixChangedObservable.add(function() {
@@ -3952,6 +4409,9 @@ HTMLWidgets.widget({
               null,
               {light: sceneLight.light}
             );
+            if (editableTargets.length) {
+              configureLightShadows(editableTargets[editableTargets.length - 1]);
+            }
           } else if (primitive.type === "sphere") {
             var sphere = registerNode(BABYLON.MeshBuilder.CreateSphere(name, {diameter: primitive.diameter}, scene));
             applyTransform(sphere, primitive);

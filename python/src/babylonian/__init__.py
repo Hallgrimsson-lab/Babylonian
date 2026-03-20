@@ -21,3 +21,14 @@ __all__ = [
     "shade3d",
     "wireframe3d",
 ]
+
+try:
+    from .shiny import scene_input_name, scene_input_value, shiny_scene3d
+
+    __all__.extend([
+        "scene_input_name",
+        "scene_input_value",
+        "shiny_scene3d",
+    ])
+except ImportError:
+    pass

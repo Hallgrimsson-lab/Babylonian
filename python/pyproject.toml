@@ -20,6 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 trimesh = ["trimesh>=4.0"]
 notebook = ["ipython>=8.0"]
+shiny = ["shiny>=0.7.0"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
