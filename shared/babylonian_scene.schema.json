@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://babylonian.dev/schema/scene-0.1.0.json",
+  "title": "Babylonian Scene",
+  "type": "object",
+  "required": ["schema", "objects", "scene"],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": {
+          "const": "babylonian.scene"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/object"
+      }
+    },
+    "scene": {
+      "type": "object",
+      "properties": {
+        "axes": {
+          "type": "boolean"
+        },
+        "nticks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "view": {
+          "$ref": "#/$defs/view"
+        }
+      },
+      "additionalProperties": true
+    },
+    "interaction": {
+      "type": ["object", "null"]
+    }
+  },
+  "$defs": {
+    "color": {
+      "type": "string"
+    },
+    "vector3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "number"
+      }
+    },
+    "matrix4": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "array",
+        "minItems": 4,
+        "maxItems": 4,
+        "items": {
+          "type": "number"
+        }
+      }
+    },
+    "view": {
+      "type": "object",
+      "properties": {
+        "zoom": {
+          "type": "number"
+        },
+        "userMatrix": {
+          "$ref": "#/$defs/matrix4"
+        },
+        "bg": {
+          "$ref": "#/$defs/color"
+        },
+        "camera": {
+          "type": "object",
+          "required": ["alpha", "beta", "radius", "target"],
+          "properties": {
+            "alpha": {
+              "type": "number"
+            },
+            "beta": {
+              "type": "number"
+            },
+            "radius": {
+              "type": "number"
+            },
+            "target": {
+              "$ref": "#/$defs/vector3"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
+    },
+    "mesh3d": {
+      "type": "object",
+      "required": ["type", "vertices", "indices"],
+      "properties": {
+        "type": {
+          "const": "mesh3d"
+        },
+        "name": {
+          "type": "string"
+        },
+        "vertices": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "indices": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "color": {
+          "$ref": "#/$defs/color"
+        },
+        "alpha": {
+          "type": "number"
+        },
+        "specularity": {
+          "$ref": "#/$defs/color"
+        },
+        "wireframe": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "light3d": {
+      "type": "object",
+      "required": ["type", "light_type"],
+      "properties": {
+        "type": {
+          "const": "light3d"
+        },
+        "light_type": {
+          "enum": ["hemispheric", "point", "directional", "spot"]
+        },
+        "name": {
+          "type": "string"
+        },
+        "position": {
+          "$ref": "#/$defs/vector3"
+        },
+        "direction": {
+          "$ref": "#/$defs/vector3"
+        },
+        "intensity": {
+          "type": "number"
+        },
+        "diffuse": {
+          "$ref": "#/$defs/color"
+        },
+        "specular": {
+          "$ref": "#/$defs/color"
+        }
+      },
+      "additionalProperties": true
+    },
+    "object": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/mesh3d"
+        },
+        {
+          "$ref": "#/$defs/light3d"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}
