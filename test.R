@@ -313,6 +313,8 @@ babylon(
 
 
 # clip away submeshes/ parts of the scene
+# gizmo undo/reset to original state
+# paint vertices index w/ symmetry support
 
 #done
 # scale bars
@@ -333,7 +335,8 @@ babylon(
 
 testscene <- babylon(
   data = list(
-    as_babylon_mesh(mesh, color = "gray75")
+    as_babylon_mesh(chondro_decim, color = "gray75"),
+    as_babylon_mesh(osteo_decim, color = "yellow")
   )
 )
 
@@ -345,3 +348,29 @@ scene <- apply_scene_state(scene, state = state)
 scene
 snapshot3d("figure.png", widget = scene)
 
+# chondro <- Morpho::file2mesh("AP38R4 chondrocranium.ply")
+# osteo <- Morpho::file2mesh("AP38R4 osteocranium.ply")
+# chondro_decim <- Rvcg::vcgQEdecim(chondro, percent = .01)
+# osteo_decim <- Rvcg::vcgQEdecim(osteo, percent = .01)
+# 
+chondro_decim$vb[-4,] <- chondro_decim$vb[-4,]*1000
+osteo_decim$vb[-4,] <- osteo_decim$vb[-4,]*1000
+
+testscene <- babylon(
+  data = list(
+    as_babylon_mesh(chondro_decim, color = "gray75"),
+    as_babylon_mesh(osteo_decim, color = "yellow")
+  )
+)
+
+testscene <- babylon(
+  data = list(
+    as_babylon_mesh(bbs, color = "gray75")
+  )
+)
+
+state <- edit_scene3d(testscene)
+
+bbs <- Morpho::file2mesh("bbs.ply")
+
+digit.fixed(mesh, 5, index = T)

@@ -118,6 +118,8 @@ HTMLWidgets.widget({
     var pendingSyncedCameraState = null;
     var lastAppliedSyncSignature = null;
     var lastBroadcastSyncSignature = null;
+    var uiDragState = null;
+    var activeClippedMeshes = [];
     var activeClippingHelper = null;
     var lastClippingSignature = null;
 
@@ -502,6 +504,8 @@ HTMLWidgets.widget({
           primitive.scaling[1] || 1,
           primitive.scaling[2] || 1
         );
+      } else {
+        mesh.scaling = new BABYLON.Vector3(1, 1, 1);
       }
 
       if (primitive.rotation) {
@@ -510,6 +514,8 @@ HTMLWidgets.widget({
           primitive.rotation[1] || 0,
           primitive.rotation[2] || 0
         );
+      } else {
+        mesh.rotation = new BABYLON.Vector3(0, 0, 0);
       }
     }
 
@@ -1466,8 +1472,65 @@ HTMLWidgets.widget({
     }
 
     function clearUiPanel() {
+      stopUiPanelDrag();
       uiLayer.style.display = "none";
       uiLayer.innerHTML = "";
+    }
+
+    function stopUiPanelDrag() {
+      if (!uiDragState) {
+        return;
+      }
+
+      document.removeEventListener("mousemove", uiDragState.onMove);
+      document.removeEventListener("mouseup", uiDragState.onUp);
+      uiDragState = null;
+    }
+
+    function enableUiPanelDrag(handle) {
+      if (!handle) {
+        return;
+      }
+
+      handle.addEventListener("mousedown", function(evt) {
+        if (evt.button !== 0) {
+          return;
+        }
+        evt.preventDefault();
+        evt.stopPropagation();
+
+        var panelRect = uiLayer.getBoundingClientRect();
+        var hostRect = el.getBoundingClientRect();
+        uiLayer.style.left = (panelRect.left - hostRect.left) + "px";
+        uiLayer.style.top = (panelRect.top - hostRect.top) + "px";
+        uiLayer.style.right = "auto";
+
+        var offsetX = evt.clientX - panelRect.left;
+        var offsetY = evt.clientY - panelRect.top;
+
+        function onMove(moveEvt) {
+          moveEvt.preventDefault();
+          var nextLeft = moveEvt.clientX - hostRect.left - offsetX;
+          var nextTop = moveEvt.clientY - hostRect.top - offsetY;
+          var maxLeft = Math.max(0, hostRect.width - uiLayer.offsetWidth);
+          var maxTop = Math.max(0, hostRect.height - uiLayer.offsetHeight);
+          nextLeft = Math.max(0, Math.min(maxLeft, nextLeft));
+          nextTop = Math.max(0, Math.min(maxTop, nextTop));
+          uiLayer.style.left = nextLeft + "px";
+          uiLayer.style.top = nextTop + "px";
+        }
+
+        function onUp() {
+          stopUiPanelDrag();
+        }
+
+        uiDragState = {
+          onMove: onMove,
+          onUp: onUp
+        };
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+      });
     }
 
     function clearHeatmapLegend() {
@@ -1485,6 +1548,23 @@ HTMLWidgets.widget({
         activeClippingHelper.dispose();
       }
       activeClippingHelper = null;
+      activeClippedMeshes.forEach(function(entry) {
+        if (!entry || !entry.mesh) {
+          return;
+        }
+        if (entry.clippedMaterial && Object.prototype.hasOwnProperty.call(entry.clippedMaterial, "clipPlane")) {
+          entry.clippedMaterial.clipPlane = null;
+          entry.clippedMaterial.clipPlane2 = null;
+          entry.clippedMaterial.clipPlane3 = null;
+        }
+        if (entry.originalMaterial !== undefined) {
+          entry.mesh.material = entry.originalMaterial;
+        }
+        if (entry.clippedMaterial && entry.clippedMaterial.dispose) {
+          entry.clippedMaterial.dispose();
+        }
+      });
+      activeClippedMeshes = [];
       scene.clipPlane = null;
       scene.clipPlane2 = null;
       scene.clipPlane3 = null;
@@ -2179,8 +2259,30 @@ HTMLWidgets.widget({
       return null;
     }
 
+    function selectedMeshNodes(state) {
+      var target = selectedMeshTarget(state);
+      if (!target) {
+        return [];
+      }
+
+      if (target.importedMeshes && target.importedMeshes.length) {
+        return target.importedMeshes.filter(function(mesh) {
+          return !!mesh;
+        });
+      }
+
+      return target.node ? [target.node] : [];
+    }
+
     function applySceneClipping(sceneOptions) {
-      var signature = JSON.stringify(sceneOptions && sceneOptions.clipping ? sceneOptions.clipping : null);
+      var clippingState = sceneOptions && sceneOptions.clipping ? sceneOptions.clipping : null;
+      var activeTargetId = activeInteractionState && activeInteractionState.mode === "edit_scene3d" && selectedMeshTarget(activeInteractionState) ?
+        selectedMeshTarget(activeInteractionState).id :
+        null;
+      var signature = JSON.stringify({
+        clipping: clippingState,
+        target: activeTargetId
+      });
       if (signature === lastClippingSignature) {
         return;
       }
@@ -2191,8 +2293,12 @@ HTMLWidgets.widget({
         return;
       }
 
-      var materialName = sceneOptions.clipping.material;
-      if (!materialName) {
+      if (!activeInteractionState || activeInteractionState.mode !== "edit_scene3d") {
+        return;
+      }
+
+      var targetMeshes = selectedMeshNodes(activeInteractionState);
+      if (!targetMeshes.length) {
         return;
       }
 
@@ -2200,11 +2306,34 @@ HTMLWidgets.widget({
       var y = Number(sceneOptions.clipping.y);
       var z = Number(sceneOptions.clipping.z);
       var center = currentSceneBounds && currentSceneBounds.center ? currentSceneBounds.center.clone() : BABYLON.Vector3.Zero();
-      var point = new BABYLON.Vector3(isFinite(x) ? x : center.x, isFinite(y) ? y : center.y, isFinite(z) ? z : center.z);
-      scene.clipPlane = new BABYLON.Plane(1, 0, 0, -(isFinite(x) ? x : center.x));
-      scene.clipPlane2 = new BABYLON.Plane(0, 1, 0, -(isFinite(y) ? y : center.y));
-      scene.clipPlane3 = new BABYLON.Plane(0, 0, 1, -(isFinite(z) ? z : center.z));
+      var clipPlaneX = new BABYLON.Plane(1, 0, 0, -(isFinite(x) ? x : center.x));
+      var clipPlaneY = new BABYLON.Plane(0, 1, 0, -(isFinite(y) ? y : center.y));
+      var clipPlaneZ = new BABYLON.Plane(0, 0, 1, -(isFinite(z) ? z : center.z));
 
+      targetMeshes.forEach(function(mesh, meshIndex) {
+        if (!mesh) {
+          return;
+        }
+        var clippedMaterial = mesh.material;
+        if (!clippedMaterial) {
+          return;
+        }
+        if (typeof clippedMaterial.clone === "function") {
+          clippedMaterial = clippedMaterial.clone((clippedMaterial.name || ("clipped-material-" + meshIndex)) + "-clip");
+        }
+        if (!clippedMaterial) {
+          return;
+        }
+        clippedMaterial.clipPlane = clipPlaneX;
+        clippedMaterial.clipPlane2 = clipPlaneY;
+        clippedMaterial.clipPlane3 = clipPlaneZ;
+        activeClippedMeshes.push({
+          mesh: mesh,
+          originalMaterial: mesh.material,
+          clippedMaterial: clippedMaterial
+        });
+        mesh.material = clippedMaterial;
+      });
     }
 
     function applyEditorClipping(state) {
@@ -2324,6 +2453,14 @@ HTMLWidgets.widget({
         return;
       }
 
+      if (state.deferGizmoAttach === true) {
+        attachEditorTarget(state, null);
+        state.gizmoManager.positionGizmoEnabled = false;
+        state.gizmoManager.rotationGizmoEnabled = false;
+        state.gizmoManager.scaleGizmoEnabled = false;
+        return;
+      }
+
       ensureEditorMode(state);
       var target = selectedEditorTarget(state);
       var visible = state.gizmosVisible !== false;
@@ -2337,10 +2474,23 @@ HTMLWidgets.widget({
       state.gizmoManager.rotationGizmoEnabled = visible && state.gizmoMode === "rotate" && canRotate;
       state.gizmoManager.scaleGizmoEnabled = visible && state.gizmoMode === "scale" && canScale;
 
-      if (state.gizmoManager.gizmos && state.gizmoManager.gizmos.positionGizmo && currentSceneBounds && currentSceneBounds.radius) {
-        state.gizmoManager.gizmos.positionGizmo.scaleRatio = Math.max(currentSceneBounds.radius * 0.004, 0.005);
+      var gizmoScaleRatio = null;
+      if (camera && isFinite(camera.radius) && camera.radius > 0) {
+        gizmoScaleRatio = Math.max(camera.radius * 0.006, 0.004);
+      } else if (currentSceneBounds && currentSceneBounds.radius) {
+        gizmoScaleRatio = Math.max(currentSceneBounds.radius * 0.006, 0.004);
+      }
+
+      if (state.gizmoManager.gizmos && state.gizmoManager.gizmos.positionGizmo && gizmoScaleRatio !== null) {
+        state.gizmoManager.gizmos.positionGizmo.scaleRatio = gizmoScaleRatio;
+      }
+      if (state.gizmoManager.gizmos && state.gizmoManager.gizmos.rotationGizmo && gizmoScaleRatio !== null) {
+        state.gizmoManager.gizmos.rotationGizmo.scaleRatio = gizmoScaleRatio;
       }
       if (state.gizmoManager.gizmos && state.gizmoManager.gizmos.scaleGizmo) {
+        if (gizmoScaleRatio !== null) {
+          state.gizmoManager.gizmos.scaleGizmo.scaleRatio = gizmoScaleRatio;
+        }
         state.gizmoManager.gizmos.scaleGizmo.uniformScaling = true;
       }
     }
@@ -2696,19 +2846,79 @@ HTMLWidgets.widget({
       if (!state.ui) {
         uiLayer.style.display = "block";
         uiLayer.innerHTML =
-          "<div style='font-weight:700; margin-bottom:6px;'>Scene Editor</div>" +
+          "<div data-role='panel-handle' style='font-weight:700; margin:-10px -10px 8px -10px; padding:10px; border-bottom:1px solid rgba(15,23,42,0.08); cursor:move; user-select:none; background:rgba(248,250,252,0.9); border-top-left-radius:8px; border-top-right-radius:8px;'>Scene Editor</div>" +
           "<div style='margin-bottom:8px; color:#475569;'>Click a mesh or light in the viewport, or select it below, then edit transforms and other settings.</div>" +
+          "<button type='button' data-role='gizmo-toggle' style='width:100%; margin-bottom:8px; border:0; border-radius:6px; background:#1d4ed8; color:white; padding:6px 10px; cursor:pointer;'>Hide Gizmo</button>" +
+          "<details data-role='section-snapshot' style='margin-bottom:8px;'>" +
+            "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Snapshot</summary>" +
+            "<div style='margin-top:8px; margin-left:10px;'>" +
+              "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='scale-bar-enabled' type='checkbox' /> Scale bar</label>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Scale bar length</label>" +
+              "<input data-role='scale-bar-length' type='number' min='0' step='any' value='1' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;' />" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Filename</label>" +
+              "<input data-role='snapshot-filename' type='text' value='scene.png' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;' />" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Format</label>" +
+              "<select data-role='snapshot-format' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
+                "<option value='png'>png</option>" +
+                "<option value='tif'>tif</option>" +
+                "<option value='svg'>svg</option>" +
+              "</select>" +
+              "<button type='button' data-role='snapshot-save' style='width:100%; border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Save Snapshot</button>" +
+              "<div style='margin-top:6px; color:#64748b;'>Helper spheres and gizmos are hidden in exported images.</div>" +
+            "</div>" +
+          "</details>" +
           "<details data-role='section-meshes' style='margin-bottom:8px;'>" +
             "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Meshes</summary>" +
             "<div style='margin-top:8px; margin-left:10px;'>" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>Mesh target</label>" +
               "<select data-role='mesh-target' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'></select>" +
               "<div style='display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap;'>" +
-                "<button type='button' data-role='mesh-mode' data-mode='translate' style='border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Move</button>" +
-                "<button type='button' data-role='mesh-mode' data-mode='rotate' style='border:0; border-radius:6px; background:#334155; color:white; padding:6px 10px; cursor:pointer;'>Rotate</button>" +
-                "<button type='button' data-role='mesh-mode' data-mode='scale' style='border:0; border-radius:6px; background:#475569; color:white; padding:6px 10px; cursor:pointer;'>Scale</button>" +
+                "<button type='button' data-role='mesh-mode' data-mode='translate' style='flex:1; min-width:0; border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Move</button>" +
+                "<button type='button' data-role='mesh-mode' data-mode='rotate' style='flex:1; min-width:0; border:0; border-radius:6px; background:#334155; color:white; padding:6px 10px; cursor:pointer;'>Rotate</button>" +
+                "<button type='button' data-role='mesh-mode' data-mode='scale' style='flex:1; min-width:0; border:0; border-radius:6px; background:#475569; color:white; padding:6px 10px; cursor:pointer;'>Scale</button>" +
+                "<button type='button' data-role='mesh-reset' style='flex:1; min-width:0; border:0; border-radius:6px; background:#991b1b; color:white; padding:6px 10px; cursor:pointer;'>Reset</button>" +
               "</div>" +
-              "<button type='button' data-role='mesh-toggle-gizmo' style='width:100%; border:0; border-radius:6px; background:#1d4ed8; color:white; padding:6px 10px; cursor:pointer;'>Hide Gizmo</button>" +
+            "</div>" +
+          "</details>" +
+          "<details data-role='section-lights' open style='margin-bottom:8px;'>" +
+            "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Lights</summary>" +
+            "<div style='margin-top:8px; margin-left:10px;'>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Lighting preset</label>" +
+              "<div style='display:flex; gap:6px; margin-bottom:8px;'>" +
+                "<select data-role='light-preset' style='flex:1; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
+                  "<option value='three_point'>three_point</option>" +
+                  "<option value='rembrandt'>rembrandt</option>" +
+                  "<option value='butterfly'>butterfly</option>" +
+                  "<option value='split'>split</option>" +
+                "</select>" +
+                "<button type='button' data-role='light-apply-preset' style='border:0; border-radius:6px; background:#0f766e; color:white; padding:6px 10px; cursor:pointer;'>Apply</button>" +
+              "</div>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>New light type</label>" +
+              "<select data-role='new-light-type' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
+                "<option value='point'>point</option>" +
+                "<option value='spot'>spot</option>" +
+                "<option value='directional'>directional</option>" +
+                "<option value='hemispheric'>hemispheric</option>" +
+              "</select>" +
+              "<div style='display:flex; gap:6px; margin-bottom:8px;'>" +
+                "<button type='button' data-role='light-add' style='flex:1; border:0; border-radius:6px; background:#0f766e; color:white; padding:6px 10px; cursor:pointer;'>Add Light</button>" +
+                "<button type='button' data-role='light-remove' style='flex:1; border:0; border-radius:6px; background:#991b1b; color:white; padding:6px 10px; cursor:pointer;'>Remove</button>" +
+              "</div>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Light target</label>" +
+              "<select data-role='light-target' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'></select>" +
+              "<div style='display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap;'>" +
+                "<button type='button' data-role='light-mode' data-mode='translate' style='border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Move</button>" +
+                "<button type='button' data-role='light-mode' data-mode='rotate' style='border:0; border-radius:6px; background:#334155; color:white; padding:6px 10px; cursor:pointer;'>Rotate</button>" +
+              "</div>" +
+              "<label data-role='intensity-label' style='display:block; margin-bottom:4px; color:#334155;'>Intensity <span data-role='intensity-value'>1</span></label>" +
+              "<input data-role='intensity-slider' type='range' min='0' max='5' step='0.01' value='1' style='width:100%; margin-bottom:8px;' />" +
+              "<label data-role='diffuse-label' style='display:block; margin-bottom:4px; color:#334155;'>Diffuse color</label>" +
+              "<input data-role='diffuse-color' type='color' value='#ffffff' style='width:100%; height:36px; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; padding:2px;' />" +
+              "<div data-role='shadow-fields' style='margin-bottom:8px;'>" +
+                "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='shadow-enabled' type='checkbox' /> Shadows</label>" +
+                "<label data-role='shadow-darkness-label' style='display:block; margin-bottom:4px; color:#334155;'>Shadow darkness <span data-role='shadow-darkness-value'>0.5</span></label>" +
+                "<input data-role='shadow-darkness-slider' type='range' min='0' max='1' step='0.01' value='0.5' style='width:100%; margin-bottom:8px;' />" +
+              "</div>" +
             "</div>" +
           "</details>" +
           "<details data-role='section-materials' style='margin-bottom:8px;'>" +
@@ -2738,48 +2948,6 @@ HTMLWidgets.widget({
               "</div>" +
               "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='material-wireframe' type='checkbox' /> Wireframe</label>" +
               "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='material-backface' type='checkbox' checked /> Backface culling</label>" +
-            "</div>" +
-          "</details>" +
-          "<details data-role='section-lights' open style='margin-bottom:8px;'>" +
-            "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Lights</summary>" +
-            "<div style='margin-top:8px; margin-left:10px;'>" +
-              "<label style='display:block; margin-bottom:4px; color:#334155;'>Lighting preset</label>" +
-              "<div style='display:flex; gap:6px; margin-bottom:8px;'>" +
-                "<select data-role='light-preset' style='flex:1; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
-                  "<option value='three_point'>three_point</option>" +
-                  "<option value='rembrandt'>rembrandt</option>" +
-                  "<option value='butterfly'>butterfly</option>" +
-                  "<option value='split'>split</option>" +
-                "</select>" +
-                "<button type='button' data-role='light-apply-preset' style='border:0; border-radius:6px; background:#7c3aed; color:white; padding:6px 10px; cursor:pointer;'>Apply</button>" +
-              "</div>" +
-              "<label style='display:block; margin-bottom:4px; color:#334155;'>New light type</label>" +
-              "<select data-role='new-light-type' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
-                "<option value='point'>point</option>" +
-                "<option value='spot'>spot</option>" +
-                "<option value='directional'>directional</option>" +
-                "<option value='hemispheric'>hemispheric</option>" +
-              "</select>" +
-              "<div style='display:flex; gap:6px; margin-bottom:8px;'>" +
-                "<button type='button' data-role='light-add' style='flex:1; border:0; border-radius:6px; background:#0f766e; color:white; padding:6px 10px; cursor:pointer;'>Add Light</button>" +
-                "<button type='button' data-role='light-remove' style='flex:1; border:0; border-radius:6px; background:#991b1b; color:white; padding:6px 10px; cursor:pointer;'>Remove</button>" +
-              "</div>" +
-              "<label style='display:block; margin-bottom:4px; color:#334155;'>Light target</label>" +
-              "<select data-role='light-target' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'></select>" +
-              "<div style='display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap;'>" +
-                "<button type='button' data-role='light-mode' data-mode='translate' style='border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Move</button>" +
-                "<button type='button' data-role='light-mode' data-mode='rotate' style='border:0; border-radius:6px; background:#334155; color:white; padding:6px 10px; cursor:pointer;'>Rotate</button>" +
-              "</div>" +
-              "<label data-role='intensity-label' style='display:block; margin-bottom:4px; color:#334155;'>Intensity <span data-role='intensity-value'>1</span></label>" +
-              "<input data-role='intensity-slider' type='range' min='0' max='5' step='0.01' value='1' style='width:100%; margin-bottom:8px;' />" +
-              "<label data-role='diffuse-label' style='display:block; margin-bottom:4px; color:#334155;'>Diffuse color</label>" +
-              "<input data-role='diffuse-color' type='color' value='#ffffff' style='width:100%; height:36px; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; padding:2px;' />" +
-              "<div data-role='shadow-fields' style='margin-bottom:8px;'>" +
-                "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='shadow-enabled' type='checkbox' /> Shadows</label>" +
-                "<label data-role='shadow-darkness-label' style='display:block; margin-bottom:4px; color:#334155;'>Shadow darkness <span data-role='shadow-darkness-value'>0.5</span></label>" +
-                "<input data-role='shadow-darkness-slider' type='range' min='0' max='1' step='0.01' value='0.5' style='width:100%; margin-bottom:8px;' />" +
-              "</div>" +
-              "<button type='button' data-role='light-toggle-gizmo' style='width:100%; border:0; border-radius:6px; background:#1d4ed8; color:white; padding:6px 10px; cursor:pointer;'>Hide Gizmo</button>" +
             "</div>" +
           "</details>" +
           "<details data-role='section-effects' style='margin-bottom:8px;'>" +
@@ -2823,24 +2991,6 @@ HTMLWidgets.widget({
               "<input data-role='clipping-z' type='range' min='-1' max='1' step='0.01' value='0' style='width:100%; margin-bottom:8px;' />" +
             "</div>" +
           "</details>" +
-          "<details data-role='section-snapshot' style='margin-bottom:8px;'>" +
-            "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Snapshot</summary>" +
-            "<div style='margin-top:8px; margin-left:10px;'>" +
-              "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='scale-bar-enabled' type='checkbox' /> Scale bar</label>" +
-              "<label style='display:block; margin-bottom:4px; color:#334155;'>Scale bar length</label>" +
-              "<input data-role='scale-bar-length' type='number' min='0' step='any' value='1' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;' />" +
-              "<label style='display:block; margin-bottom:4px; color:#334155;'>Filename</label>" +
-              "<input data-role='snapshot-filename' type='text' value='scene.png' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;' />" +
-              "<label style='display:block; margin-bottom:4px; color:#334155;'>Format</label>" +
-              "<select data-role='snapshot-format' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
-                "<option value='png'>png</option>" +
-                "<option value='tif'>tif</option>" +
-                "<option value='svg'>svg</option>" +
-              "</select>" +
-              "<button type='button' data-role='snapshot-save' style='width:100%; border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Save Snapshot</button>" +
-              "<div style='margin-top:6px; color:#64748b;'>Helper spheres and gizmos are hidden in exported images.</div>" +
-            "</div>" +
-          "</details>" +
           "<details data-role='section-log' style='margin-bottom:8px;'>" +
             "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Scene State Log</summary>" +
             "<div style='margin-top:8px; margin-left:10px;'>" +
@@ -2850,6 +3000,8 @@ HTMLWidgets.widget({
           "</details>";
 
         state.ui = {
+          panelHandle: uiLayer.querySelector("[data-role='panel-handle']"),
+          gizmoToggleButton: uiLayer.querySelector("[data-role='gizmo-toggle']"),
           meshSection: uiLayer.querySelector("[data-role='section-meshes']"),
           materialSection: uiLayer.querySelector("[data-role='section-materials']"),
           lightSection: uiLayer.querySelector("[data-role='section-lights']"),
@@ -2858,6 +3010,7 @@ HTMLWidgets.widget({
           snapshotSection: uiLayer.querySelector("[data-role='section-snapshot']"),
           logSection: uiLayer.querySelector("[data-role='section-log']"),
           meshSelect: uiLayer.querySelector("[data-role='mesh-target']"),
+          meshResetButton: uiLayer.querySelector("[data-role='mesh-reset']"),
           materialLibrarySelect: uiLayer.querySelector("[data-role='material-library']"),
           materialAssignButton: uiLayer.querySelector("[data-role='material-assign']"),
           materialSaveButton: uiLayer.querySelector("[data-role='material-save']"),
@@ -2894,8 +3047,6 @@ HTMLWidgets.widget({
           shadowDarknessLabel: uiLayer.querySelector("[data-role='shadow-darkness-label']"),
           shadowDarknessValue: uiLayer.querySelector("[data-role='shadow-darkness-value']"),
           shadowDarknessSlider: uiLayer.querySelector("[data-role='shadow-darkness-slider']"),
-          meshToggleButton: uiLayer.querySelector("[data-role='mesh-toggle-gizmo']"),
-          lightToggleButton: uiLayer.querySelector("[data-role='light-toggle-gizmo']"),
           scaleBarEnabledInput: uiLayer.querySelector("[data-role='scale-bar-enabled']"),
           scaleBarLengthInput: uiLayer.querySelector("[data-role='scale-bar-length']"),
           snapshotFilenameInput: uiLayer.querySelector("[data-role='snapshot-filename']"),
@@ -2919,12 +3070,19 @@ HTMLWidgets.widget({
           lightModeButtons: Array.prototype.slice.call(uiLayer.querySelectorAll("[data-role='light-mode']"))
         };
 
+        enableUiPanelDrag(state.ui.panelHandle);
+
         state.ui.meshSelect.addEventListener("change", function(evt) {
           state.selectedId = evt.target.value;
+          state.deferGizmoAttach = false;
           state.sectionOpen.meshes = true;
           state.sectionOpen.materials = true;
           syncEditorGizmoState(state);
           updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+        });
+
+        state.ui.meshResetButton.addEventListener("click", function() {
+          resetSelectedMeshTarget(state);
         });
 
         function updateSelectedMaterial(mutator) {
@@ -3022,6 +3180,7 @@ HTMLWidgets.widget({
 
         state.ui.lightSelect.addEventListener("change", function(evt) {
           state.selectedId = evt.target.value;
+          state.deferGizmoAttach = false;
           state.sectionOpen.lights = true;
           syncEditorGizmoState(state);
           updateSceneEditorPanel(state, buildSceneEditorPayload(state));
@@ -3059,13 +3218,7 @@ HTMLWidgets.widget({
           });
         });
 
-        state.ui.meshToggleButton.addEventListener("click", function() {
-          state.gizmosVisible = !state.gizmosVisible;
-          syncEditorGizmoState(state);
-          updateSceneEditorPanel(state, buildSceneEditorPayload(state));
-        });
-
-        state.ui.lightToggleButton.addEventListener("click", function() {
+        state.ui.gizmoToggleButton.addEventListener("click", function() {
           state.gizmosVisible = !state.gizmosVisible;
           syncEditorGizmoState(state);
           updateSceneEditorPanel(state, buildSceneEditorPayload(state));
@@ -3427,10 +3580,8 @@ HTMLWidgets.widget({
       }
 
       var gizmoLabel = state.gizmosVisible === false ? "Show Gizmo" : "Hide Gizmo";
-      state.ui.meshToggleButton.disabled = !meshTargets.length;
-      state.ui.lightToggleButton.disabled = !lightTargets.length;
-      state.ui.meshToggleButton.textContent = gizmoLabel;
-      state.ui.lightToggleButton.textContent = gizmoLabel;
+      state.ui.gizmoToggleButton.disabled = !selected;
+      state.ui.gizmoToggleButton.textContent = gizmoLabel;
       var scaleBarSpec = state.scaleBar || {enabled: false};
       state.ui.scaleBarEnabledInput.checked = scaleBarSpec.enabled === true;
       state.ui.scaleBarLengthInput.disabled = scaleBarSpec.enabled !== true;
@@ -3751,6 +3902,7 @@ HTMLWidgets.widget({
           selectedId: editableTargets && editableTargets.length ? editableTargets[0].id : null,
           gizmoMode: "translate",
           gizmosVisible: true,
+          deferGizmoAttach: true,
           dispose: function() {
             clearUiPanel();
             attachEditorTarget(editorState, null);
@@ -3804,6 +3956,7 @@ HTMLWidgets.widget({
           }
 
           editorState.selectedId = selectedTarget.id;
+          editorState.deferGizmoAttach = false;
           var section = targetSelectionSection(selectedTarget);
           if (section) {
             editorState.sectionOpen[section] = true;
@@ -4043,6 +4196,10 @@ HTMLWidgets.widget({
         label: label || ((primitive.name || (primitive.type + " " + (index + 1))) + " [" + kind + "]")
       };
 
+      if (primitive) {
+        target.originalPrimitive = JSON.parse(JSON.stringify(primitive));
+      }
+
       if (extras) {
         Object.keys(extras).forEach(function(key) {
           target[key] = extras[key];
@@ -4266,6 +4423,28 @@ HTMLWidgets.widget({
       if (target.node && target.node.material !== undefined) {
         applyMaterial(target.node, target.primitive);
       }
+    }
+
+    function resetSelectedMeshTarget(state) {
+      var target = selectedMeshTarget(state);
+      if (!target || !target.originalPrimitive) {
+        return;
+      }
+
+      target.primitive = JSON.parse(JSON.stringify(target.originalPrimitive));
+
+      if (target.importedMeshes && target.importedMeshes.length) {
+        if (target.node) {
+          applyTransform(target.node, target.primitive);
+        }
+        applyMaterialToEditorTarget(target);
+      } else if (target.node) {
+        applyTransform(target.node, target.primitive);
+        applyMaterialToEditorTarget(target);
+      }
+
+      updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+      publishSceneEditorState(state);
     }
 
     function disposeEditorTarget(target) {
@@ -4629,6 +4808,11 @@ HTMLWidgets.widget({
             frameScene();
             applyViewOptions(currentSceneBounds, currentSceneOptions);
             renderAxes(currentSceneBounds, currentSceneOptions);
+            if (activeInteractionState && activeInteractionState.mode === "edit_scene3d") {
+              syncEditorGizmoState(activeInteractionState);
+              updateSceneEditorPanel(activeInteractionState, buildSceneEditorPayload(activeInteractionState));
+              scheduleEditorGizmoRefresh(activeInteractionState);
+            }
             schedulePoseStatePublish();
           }
         }

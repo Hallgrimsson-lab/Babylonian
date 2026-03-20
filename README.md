@@ -25,12 +25,11 @@ library(Babylonian)
 babylon(
   data = list(
     list(type = "sphere", diameter = 1),
-    import_mesh(system.file("htmlwidgets/cube.obj", package = "Babylonian"))
   )
 )
 ```
 
-For in-memory `mesh3d` objects, `plot3d()` is usually the most convenient entry point:
+Babylonian also interfaces with `mesh3d` objects, so you can use `plot3d()` like you would with rgl:
 
 ``` r
 library(Babylonian)
@@ -38,7 +37,6 @@ library(Morpho)
 
 mesh <- file2mesh("my_mesh.obj")
 
-plot3d(mesh, color = "#d97706")
 plot3d(mesh, color = "#2563eb", alpha = 0.95, axes = TRUE, nticks = 4)
 ```
 
@@ -59,9 +57,9 @@ par3d(
 )
 
 bg3d("#f5f5f5")
-plot3d(your_morpho_mesh)
+plot3d(mesh)
 
-last_par3d()
+par3d()
 ```
 
 You can also add a canned studio-lighting rig directly from R with the same preset names used by `edit_scene3d()`:
@@ -194,7 +192,7 @@ plot3d(your_morpho_mesh)
 points3d(matrix(rnorm(60), ncol = 3), color = "tomato")
 ```
 
-## Helper Wrappers
+## Common Wrappers
 
 `plot3d()` starts a fresh scene by default. Helper wrappers such as `points3d()`, `spheres3d()`, `segments3d()`, `planes3d()`, `shade3d()`, and `wireframe3d()` add to the current scene by default in a more `rgl`-like style.
 
@@ -237,14 +235,14 @@ planes3d(0, 0, 1, 0, color = "tomato", alpha = 0.35)
 Shaded and wireframe surfaces:
 
 ``` r
-shade3d(your_morpho_mesh, color = "gray75", specularity = 0.3, add = FALSE)
-wireframe3d(your_morpho_mesh, color = "black")
+shade3d(mesh, color = "gray75", specularity = 0.3, add = FALSE)
+wireframe3d(mesh, color = "black")
 ```
 
 BabylonJS light types are available through `light3d()` and dedicated wrappers:
 
 ``` r
-plot3d(your_morpho_mesh, color = "gray75", specularity = 0.3)
+plot3d(mesh, color = "gray75", specularity = 0.3)
 light3d_hemispheric(intensity = 0.35, ground_color = "gray20")
 light3d_directional(
   direction = c(-0.5, -1, 0.2),
@@ -258,20 +256,15 @@ light3d_point(
 )
 ```
 
-## Analysis
+## Annotation & analysis
 
-For interactive landmark collection on a mesh surface, use BabylonJS ray casting through `digitize_landmarks()`:
+### Landmarking
 
-``` r
-digitize_landmarks(
-  mesh,
-  n = 5
-)
-```
+For interactive landmark collection on a mesh surface, use BabylonJS ray casting through `digit.fixed()`. The picked landmarks render as small spheres relative to mesh size, and in an interactive R session the function returns a 3-column coordinate matrix.
 
-The picked landmarks render as small spheres relative to mesh size, and in an interactive R session the function returns a 3-column coordinate matrix.
+We try to mimic the core features of Geomorph's implementation by centering the specimen by default, snapping picks to the nearest mesh vertex rather than an arbitrary point on a triangle, previewing each selection so it can be accepted or retried, and optionally returning the selected vertex indices along with the landmark coordinates.
 
-For Geomorph-style workflows, Babylonian also provides `digit.fixed()` as a compatibility wrapper:
+GIF placeholder: [landmarking-demo.gif](inst/extdata/landmarking-demo.gif)
 
 ``` r
 digit.fixed(
@@ -283,7 +276,7 @@ digit.fixed(
 )
 ```
 
-It tries to mimic the core features of Geomorph's implementation by centering the specimen by default, snapping picks to the nearest mesh vertex rather than an arbitrary point on a triangle, previewing each selection so it can be accepted or retried, and optionally returning the selected vertex indices along with the landmark coordinates.
+### Heatmaps
 
 To compare two matching-topology meshes, `meshDist()` colors the reference mesh by signed vertex displacement and can optionally overlay displacement vectors:
 
@@ -294,18 +287,88 @@ meshDist(reference_mesh, target_mesh, displace = TRUE)
 You can also work from a precomputed per-vertex distance vector:
 
 ``` r
-meshDist(reference_mesh, distvec = your_distvec, displace = TRUE)
+meshDist(reference_mesh, distvec = your_distvec)
 ```
 
-To plot only the corresponding heatmap scale as a 2D graphic, use `heatmap_scale()`:
+To plot only the corresponding heatmap scale as a 2D graphic, use `heatmap_scale()` with the same arguments you passed to `meshDist()` :
 
 ``` r
 heatmap_scale(reference_mesh, target_mesh)
 ```
 
-## Animation
+### Morphing
+
+We offer a quick utility for creating morph targets for interactive inspection with `morph_target3d()`:
+
+``` r
+scene <- babylon(
+  data = list(
+    morph_target3d(
+      reference_mesh,
+      target_mesh,
+      influence = 0.5,
+      color = "gray75"
+    )
+  )
+)
+
+scene
+```
+
+You can also combine a morph target with the scene editor, save the resulting camera and lighting setup, and then reuse it:
+
+``` r
+scene <- babylon(
+  data = list(
+    morph_target3d(reference_mesh, target_mesh, influence = 0.25, color = "gray75")
+  )
+)
+
+state <- edit_scene3d(scene)
+scene <- apply_scene_state(scene, state = state)
+snapshot3d("morph-scene.png", widget = scene)
+```
+
+## Showing off your work
+
+### The scene editor
+
+We offer several utilities for easy figure making and screenshotting (to .png & .tif). `create_pose3d()` is a lightweight widget to orient and frame a mesh. It returns the posed settings that can be passed along to `par3d()` for consistent figure making:
+
+``` r
+pose <- create_pose_3d(mesh)
+par3d(zoom = pose$zoom, userMatrix = pose$userMatrix, bg = pose$bg)
+plot3d(mesh)
+```
+
+`edit_scene3d()` is a more fully featured GUI for creating a scene and either directly screenshotting from within the widget, or for applying the scene settings to future uses:
+
+GIF placeholder: [scene-editor-demo.gif](inst/extdata/scene-editor-demo.gif)
+
+``` r
+scene <- babylon(
+  data = list(
+    as_babylon_mesh(mesh, color = "gray75"),
+    as_babylon_light(
+      type = "point",
+      name = "key",
+      position = c(100, 80, 120),
+      intensity = 0.8,
+      diffuse = "#ffd166"
+    )
+  )
+)
+
+state <- edit_scene3d(scene)
+scene <- apply_scene_state(scene, state = state)
+snapshot3d("edited-scene.png", widget = scene)
+```
+
+### Animation
 
 Babylonian can generate camera paths, animate morph-target influence, render high-resolution PNG frames, and then encode either a GIF or a video.
+
+GIF placeholder: [animation-demo.gif](inst/extdata/animation-demo.gif)
 
 Create a morphing scene:
 
