@@ -61,6 +61,74 @@ texture3d <- function(
   structure(texture, class = c("babylon_texture", "list"))
 }
 
+#' Create a named Babylon material reference
+#'
+#' @param name Registered material name.
+#'
+#' @export
+material_ref3d <- function(name) {
+  if (!is.character(name) || !length(name) || !nzchar(name[[1]])) {
+    stop("`name` must be a non-empty string.", call. = FALSE)
+  }
+
+  structure(
+    list(type = "material_ref", name = as.character(name[[1]])),
+    class = c("babylon_material_ref", "list")
+  )
+}
+
+#' Register a reusable named material
+#'
+#' @param name Registry key.
+#' @param material Babylonian material descriptor.
+#' @param overwrite Whether to overwrite an existing entry.
+#'
+#' @export
+register_material3d <- function(name, material, overwrite = TRUE) {
+  name <- normalize_material_registry_name(name)
+  if (!isTRUE(overwrite) && !is.null(.babylon_state$material_registry[[name]])) {
+    stop("A material named `", name, "` is already registered.", call. = FALSE)
+  }
+
+  .babylon_state$material_registry[[name]] <- normalize_material3d(material)
+  invisible(get_material3d(name))
+}
+
+#' Get a registered named material
+#'
+#' @param name Registry key.
+#' @param default Optional fallback when the material is not found.
+#'
+#' @export
+get_material3d <- function(name, default = NULL) {
+  name <- normalize_material_registry_name(name)
+  material <- .babylon_state$material_registry[[name]]
+  if (is.null(material)) {
+    return(default)
+  }
+
+  structure(material, class = c("babylon_material", "list"))
+}
+
+#' List registered material names
+#'
+#' @export
+list_materials3d <- function() {
+  sort(names(.babylon_state$material_registry))
+}
+
+#' Remove a registered named material
+#'
+#' @param name Registry key.
+#'
+#' @export
+remove_material3d <- function(name) {
+  name <- normalize_material_registry_name(name)
+  existing <- .babylon_state$material_registry[[name]]
+  .babylon_state$material_registry[[name]] <- NULL
+  invisible(if (is.null(existing)) NULL else structure(existing, class = c("babylon_material", "list")))
+}
+
 #' Create a standard Babylon material descriptor
 #'
 #' @param diffuse Diffuse surface color.
@@ -297,6 +365,10 @@ normalize_material3d <- function(x) {
     return(NULL)
   }
 
+  if (inherits(x, "babylon_material_ref")) {
+    return(unclass(material_ref3d(x$name)))
+  }
+
   if (inherits(x, "babylon_material")) {
     return(unclass(x))
   }
@@ -323,8 +395,47 @@ normalize_material3d <- function(x) {
     }
     return(unclass(do.call(node_material3d, args)))
   }
+  if (identical(type, "material_ref")) {
+    return(unclass(material_ref3d(x$name)))
+  }
 
   stop("Unsupported material type: ", type, call. = FALSE)
+}
+
+normalize_scene_material_library <- function(x = NULL) {
+  registry <- .babylon_state$material_registry %||% list()
+  registry <- if (length(registry)) {
+    stats::setNames(lapply(registry, normalize_material3d), names(registry))
+  } else {
+    list()
+  }
+
+  if (is.null(x)) {
+    return(registry)
+  }
+
+  if (!is.list(x)) {
+    stop("`scene$materials` must be a named list of material descriptors.", call. = FALSE)
+  }
+
+  if (!length(x)) {
+    return(registry)
+  }
+
+  if (is.null(names(x)) || any(!nzchar(names(x)))) {
+    stop("`scene$materials` must be a named list of material descriptors.", call. = FALSE)
+  }
+
+  overrides <- stats::setNames(lapply(x, normalize_material3d), names(x))
+  utils::modifyList(registry, overrides)
+}
+
+normalize_material_registry_name <- function(x) {
+  if (!is.character(x) || !length(x) || !nzchar(x[[1]])) {
+    stop("`name` must be a non-empty string.", call. = FALSE)
+  }
+
+  as.character(x[[1]])
 }
 
 normalize_material_bindings <- function(x, arg) {

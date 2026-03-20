@@ -147,6 +147,44 @@ testthat::test_that("advanced material constructors build normalized descriptors
   testthat::expect_equal(shader$uniforms$scale, 2)
 })
 
+testthat::test_that("material registry stores named materials and scene refs can use them", {
+  previous_registry <- .babylon_state$material_registry
+  on.exit({
+    .babylon_state$material_registry <- previous_registry
+  }, add = TRUE)
+  .babylon_state$material_registry <- list()
+
+  register_material3d("bronze", pbr_material3d(base_color = "#CD7F32", metallic = 0.6, roughness = 0.4))
+
+  testthat::expect_true("bronze" %in% list_materials3d())
+  testthat::expect_s3_class(get_material3d("bronze"), "babylon_material")
+
+  mesh3d_obj <- structure(
+    list(
+      vb = rbind(
+        c(0, 1, 0),
+        c(0, 0, 1),
+        c(0, 0, 0),
+        c(1, 1, 1)
+      ),
+      it = matrix(c(1, 2, 3), nrow = 3)
+    ),
+    class = "mesh3d"
+  )
+
+  mesh <- as_babylon_mesh(mesh3d_obj, material = material_ref3d("bronze"))
+  widget <- plot3d(mesh)
+
+  testthat::expect_identical(widget$x$objects[[1]]$material$type, "material_ref")
+  testthat::expect_identical(widget$x$objects[[1]]$material$name, "bronze")
+  testthat::expect_identical(widget$x$scene$materials$bronze$type, "pbr")
+  testthat::expect_equal(widget$x$scene$materials$bronze$metallic, 0.6)
+
+  removed <- remove_material3d("bronze")
+  testthat::expect_s3_class(removed, "babylon_material")
+  testthat::expect_false("bronze" %in% list_materials3d())
+})
+
 testthat::test_that("node materials load from packaged JSON exports", {
   file <- system.file("extdata", "nodeMaterial-demo.json", package = "Babylonian")
   if (!nzchar(file)) {

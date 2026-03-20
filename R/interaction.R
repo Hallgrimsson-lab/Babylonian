@@ -456,6 +456,9 @@ seed_scene_state_entry <- function(object, index) {
     entry$position <- normalize_transform_vector(object$position %||% c(0, 0, 0), "position")
     entry$rotation <- normalize_transform_vector(object$rotation %||% c(0, 0, 0), "rotation")
     entry$scaling <- normalize_transform_vector(object$scaling %||% c(1, 1, 1), "scaling")
+    if (!is.null(object$material)) {
+      entry$material <- normalize_material3d(object$material)
+    }
     return(entry)
   }
 
@@ -535,6 +538,10 @@ normalize_scene_state_entry <- function(x) {
     }
   }
 
+  if (!is.null(x$material)) {
+    entry$material <- normalize_material3d(x$material)
+  }
+
   if (!is.null(x$light_type)) {
     entry$light_type <- as.character(x$light_type[[1]])
   }
@@ -557,6 +564,10 @@ normalize_scene_state_entry <- function(x) {
 
   if (!is.null(x$enabled)) {
     entry$enabled <- isTRUE(x$enabled)
+  }
+
+  if (!is.null(x$created_in_editor)) {
+    entry$created_in_editor <- isTRUE(x$created_in_editor)
   }
 
   entry
@@ -590,6 +601,10 @@ apply_scene_state_to_objects <- function(objects, edits) {
   for (entry in edits) {
     idx <- locate_scene_state_object(edited, entry)
     if (is.na(idx)) {
+      created <- create_scene_object_from_state(entry)
+      if (!is.null(created)) {
+        edited[[length(edited) + 1L]] <- created
+      }
       next
     }
     edited[[idx]] <- apply_scene_state_entry(edited[[idx]], entry)
@@ -640,7 +655,102 @@ apply_scene_state_entry <- function(object, entry) {
     }
   }
 
+  if (!is.null(entry$material)) {
+    object$material <- normalize_material3d(entry$material)
+  }
+
   object
+}
+
+create_scene_object_from_state <- function(entry) {
+  primitive_type <- entry$primitive_type %||% NULL
+
+  if (identical(primitive_type, "light3d")) {
+    return(create_babylon_light(
+      type = entry$light_type %||% "hemispheric",
+      position = entry$position %||% NULL,
+      direction = entry$direction %||% NULL,
+      intensity = entry$intensity %||% 1,
+      diffuse = entry$diffuse %||% "white",
+      specular = entry$specular %||% "white",
+      ground_color = entry$ground_color %||% NULL,
+      angle = entry$angle %||% NULL,
+      exponent = entry$exponent %||% NULL,
+      range = entry$range %||% NULL,
+      name = entry$name %||% NULL,
+      enabled = entry$enabled %||% TRUE
+    ))
+  }
+
+  NULL
+}
+
+save_scene_editor_snapshot <- function(widget, state, request = NULL) {
+  state <- normalize_scene_state(state)
+  if (is.null(state)) {
+    stop("No scene state is available for snapshot export.", call. = FALSE)
+  }
+
+  request <- request %||% list()
+  format <- tolower(as.character(request$format %||% "png"))
+  filename <- as.character(request$filename %||% paste0("scene.", format))
+  if (!nzchar(filename)) {
+    filename <- paste0("scene.", format)
+  }
+  if (grepl("\\.[A-Za-z0-9]+$", filename)) {
+    filename <- sub("\\.[A-Za-z0-9]+$", paste0(".", format), filename)
+  } else {
+    filename <- paste0(filename, ".", format)
+  }
+
+  width <- suppressWarnings(as.integer(request$vwidth %||% widget$width %||% 1100L))
+  height <- suppressWarnings(as.integer(request$vheight %||% widget$height %||% 800L))
+  if (!is.finite(width) || width < 1L) {
+    width <- 1100L
+  }
+  if (!is.finite(height) || height < 1L) {
+    height <- 800L
+  }
+
+  output_path <- normalizePath(filename, winslash = "/", mustWork = FALSE)
+  clean_widget <- apply_scene_state(widget, state = state)
+  clean_widget$x$interaction <- NULL
+  extension <- tolower(tools::file_ext(output_path))
+  if (!nzchar(extension)) {
+    extension <- format
+  }
+
+  if (extension %in% c("png", "jpg", "jpeg", "webp", "pdf")) {
+    snapshot3d(output_path, widget = clean_widget, vwidth = width, vheight = height)
+    return(output_path)
+  }
+
+  tmp_png <- tempfile(fileext = ".png")
+  snapshot3d(tmp_png, widget = clean_widget, vwidth = width, vheight = height)
+
+  if (extension %in% c("tif", "tiff")) {
+    if (!requireNamespace("magick", quietly = TRUE)) {
+      stop("Package 'magick' is required to export TIFF snapshots from `edit_scene3d()`.", call. = FALSE)
+    }
+    image <- magick::image_read(tmp_png)
+    magick::image_write(image, path = output_path, format = "tiff")
+    return(output_path)
+  }
+
+  if (identical(extension, "svg")) {
+    encoded <- jsonlite::base64_enc(tmp_png)
+    svg <- paste0(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='", width, "' height='", height,
+      "' viewBox='0 0 ", width, " ", height, "'>",
+      "<image width='", width, "' height='", height,
+      "' href='data:image/png;base64,", encoded, "' />",
+      "</svg>"
+    )
+    writeLines(svg, con = output_path, useBytes = TRUE)
+    return(output_path)
+  }
+
+  stop("Unsupported snapshot format for `edit_scene3d()`: ", extension, call. = FALSE)
 }
 
 editable_mesh_primitive_types <- function() {
@@ -826,6 +936,8 @@ run_scene_editor_gadget <- function(widget) {
   server <- function(input, output, session) {
     scene_state_input <- paste0(widget$elementId, "_scene_state")
     par3d_input <- paste0(widget$elementId, "_par3d")
+    snapshot_input <- paste0(widget$elementId, "_snapshot_request")
+    material_save_input <- paste0(widget$elementId, "_material_library_save")
 
     shiny::observeEvent(input[[par3d_input]], {
       value <- input[[par3d_input]]
@@ -839,6 +951,47 @@ run_scene_editor_gadget <- function(widget) {
       if (!is.null(value) && nzchar(value)) {
         set_last_scene_state(jsonlite::fromJSON(value, simplifyVector = FALSE))
       }
+    }, ignoreNULL = TRUE)
+
+    shiny::observeEvent(input[[snapshot_input]], {
+      request <- input[[snapshot_input]]
+      state <- current_scene_state_input(input[[scene_state_input]], fallback = initial_state)
+      tryCatch({
+        path <- save_scene_editor_snapshot(widget, state = state, request = request)
+        shiny::showNotification(
+          paste("Saved snapshot to", path),
+          type = "message",
+          duration = 4
+        )
+      }, error = function(e) {
+        shiny::showNotification(
+          conditionMessage(e),
+          type = "error",
+          duration = 6
+        )
+      })
+    }, ignoreNULL = TRUE)
+
+    shiny::observeEvent(input[[material_save_input]], {
+      payload <- input[[material_save_input]]
+      if (is.null(payload) || !is.list(payload) || is.null(payload$name) || is.null(payload$material)) {
+        return()
+      }
+
+      tryCatch({
+        register_material3d(payload$name, payload$material, overwrite = TRUE)
+        shiny::showNotification(
+          paste("Saved material", shQuote(as.character(payload$name[[1]])), "to the registry"),
+          type = "message",
+          duration = 4
+        )
+      }, error = function(e) {
+        shiny::showNotification(
+          conditionMessage(e),
+          type = "error",
+          duration = 6
+        )
+      })
     }, ignoreNULL = TRUE)
 
     shiny::observeEvent(input$done, {

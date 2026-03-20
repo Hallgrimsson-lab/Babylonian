@@ -723,85 +723,120 @@ HTMLWidgets.widget({
       return texture;
     }
 
-    function createMaterialFromSpec(mesh, primitive, spec) {
-      var material;
-      var materialName = (spec && spec.name) || mesh.name + "-material";
+    function sceneMaterialLibrary() {
+      return currentSceneOptions && currentSceneOptions.materials && typeof currentSceneOptions.materials === "object"
+        ? currentSceneOptions.materials
+        : {};
+    }
 
-      if (!spec) {
+    function resolveMaterialSpec(spec, seenNames) {
+      if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+        return spec;
+      }
+
+      if (spec.type !== "material_ref") {
+        return spec;
+      }
+
+      var name = spec.name;
+      if (!name || typeof name !== "string") {
         return null;
       }
 
-      if (spec.type === "pbr") {
+      var seen = seenNames ? seenNames.slice() : [];
+      if (seen.indexOf(name) !== -1) {
+        return null;
+      }
+      seen.push(name);
+
+      var library = sceneMaterialLibrary();
+      if (!Object.prototype.hasOwnProperty.call(library, name)) {
+        return null;
+      }
+
+      return resolveMaterialSpec(library[name], seen);
+    }
+
+    function createMaterialFromSpec(mesh, primitive, spec) {
+      var material;
+      var resolvedSpec = resolveMaterialSpec(spec);
+      var materialName = (resolvedSpec && resolvedSpec.name) || (spec && spec.name) || mesh.name + "-material";
+
+      if (!resolvedSpec) {
+        return null;
+      }
+
+      if (resolvedSpec.type === "pbr") {
         material = registerMaterial(new BABYLON.PBRMaterial(materialName, scene));
-        material.albedoColor = coerceColor3(spec.base_color || spec.albedo || "#FFFFFF", new BABYLON.Color3(1, 1, 1));
-        material.metallic = spec.metallic === undefined ? 0 : Number(spec.metallic);
-        material.roughness = spec.roughness === undefined ? 1 : Number(spec.roughness);
-        if (spec.base_color_texture) {
-          material.albedoTexture = createTextureFromSpec(spec.base_color_texture, "srgb");
+        material.albedoColor = coerceColor3(resolvedSpec.base_color || resolvedSpec.albedo || "#FFFFFF", new BABYLON.Color3(1, 1, 1));
+        material.metallic = resolvedSpec.metallic === undefined ? 0 : Number(resolvedSpec.metallic);
+        material.roughness = resolvedSpec.roughness === undefined ? 1 : Number(resolvedSpec.roughness);
+        if (resolvedSpec.base_color_texture) {
+          material.albedoTexture = createTextureFromSpec(resolvedSpec.base_color_texture, "srgb");
         }
-        if (spec.metallic_roughness_texture) {
-          material.metallicTexture = createTextureFromSpec(spec.metallic_roughness_texture, "linear");
+        if (resolvedSpec.metallic_roughness_texture) {
+          material.metallicTexture = createTextureFromSpec(resolvedSpec.metallic_roughness_texture, "linear");
           if (material.metallicTexture) {
             material.useMetallnessFromMetallicTextureBlue = true;
             material.useRoughnessFromMetallicTextureGreen = true;
             material.useAmbientOcclusionFromMetallicTextureRed = true;
           }
         }
-        if (spec.normal_texture) {
-          material.bumpTexture = createTextureFromSpec(spec.normal_texture, "linear");
+        if (resolvedSpec.normal_texture) {
+          material.bumpTexture = createTextureFromSpec(resolvedSpec.normal_texture, "linear");
         }
-        if (spec.occlusion_texture) {
-          material.ambientTexture = createTextureFromSpec(spec.occlusion_texture, "linear");
+        if (resolvedSpec.occlusion_texture) {
+          material.ambientTexture = createTextureFromSpec(resolvedSpec.occlusion_texture, "linear");
         }
-        if (spec.emissive_texture) {
-          material.emissiveTexture = createTextureFromSpec(spec.emissive_texture, "srgb");
+        if (resolvedSpec.emissive_texture) {
+          material.emissiveTexture = createTextureFromSpec(resolvedSpec.emissive_texture, "srgb");
         }
-        if (spec.emissive !== undefined) {
-          material.emissiveColor = coerceColor3(spec.emissive, new BABYLON.Color3(0, 0, 0));
+        if (resolvedSpec.emissive !== undefined) {
+          material.emissiveColor = coerceColor3(resolvedSpec.emissive, new BABYLON.Color3(0, 0, 0));
         }
-        if (spec.unlit !== undefined) {
-          material.unlit = !!spec.unlit;
+        if (resolvedSpec.unlit !== undefined) {
+          material.unlit = !!resolvedSpec.unlit;
         }
-        configureCommonMaterial(material, spec, mesh);
+        configureCommonMaterial(material, resolvedSpec, mesh);
         return material;
       }
 
-      if (spec.type === "node") {
-        material = registerMaterial(BABYLON.NodeMaterial.Parse(spec.source, scene, ""));
-        if (spec.name) {
-          material.name = spec.name;
+      if (resolvedSpec.type === "node") {
+        material = registerMaterial(BABYLON.NodeMaterial.Parse(resolvedSpec.source, scene, ""));
+        if (resolvedSpec.name) {
+          material.name = resolvedSpec.name;
         }
-        if (spec.params) {
-          Object.keys(spec.params).forEach(function(paramName) {
+        if (resolvedSpec.params) {
+          Object.keys(resolvedSpec.params).forEach(function(paramName) {
             var block = material.getBlockByName(paramName);
             if (block) {
-              block.value = coerceNodeMaterialValue(block, spec.params[paramName]);
+              block.value = coerceNodeMaterialValue(block, resolvedSpec.params[paramName]);
             }
           });
         }
         if (typeof material.build === "function") {
           material.build(false);
         }
-        configureCommonMaterial(material, spec, mesh);
+        configureCommonMaterial(material, resolvedSpec, mesh);
         return material;
       }
 
-      if (spec.type === "shader") {
-        var shaderName = spec.name || materialName;
+      if (resolvedSpec.type === "shader") {
+        var shaderName = resolvedSpec.name || materialName;
         var uniformNames = ["worldViewProjection"];
         var samplerNames = [];
 
-        if (spec.uniforms) {
-          uniformNames = uniformNames.concat(Object.keys(spec.uniforms));
+        if (resolvedSpec.uniforms) {
+          uniformNames = uniformNames.concat(Object.keys(resolvedSpec.uniforms));
         }
-        if (spec.textures) {
-          samplerNames = Object.keys(spec.textures);
+        if (resolvedSpec.textures) {
+          samplerNames = Object.keys(resolvedSpec.textures);
         }
 
         uniformNames = Array.from(new Set(uniformNames));
 
-        BABYLON.Effect.ShadersStore[shaderName + "VertexShader"] = spec.vertex;
-        BABYLON.Effect.ShadersStore[shaderName + "FragmentShader"] = spec.fragment;
+        BABYLON.Effect.ShadersStore[shaderName + "VertexShader"] = resolvedSpec.vertex;
+        BABYLON.Effect.ShadersStore[shaderName + "FragmentShader"] = resolvedSpec.fragment;
         material = registerMaterial(new BABYLON.ShaderMaterial(
           materialName,
           scene,
@@ -812,34 +847,34 @@ HTMLWidgets.widget({
             samplers: samplerNames
           }
         ));
-        applyShaderUniforms(material, spec.uniforms);
-        applyShaderTextures(material, spec.textures);
-        configureCommonMaterial(material, spec, mesh);
+        applyShaderUniforms(material, resolvedSpec.uniforms);
+        applyShaderTextures(material, resolvedSpec.textures);
+        configureCommonMaterial(material, resolvedSpec, mesh);
         return material;
       }
 
       material = registerMaterial(new BABYLON.StandardMaterial(materialName, scene));
-      material.backFaceCulling = spec.backface_culling === undefined ? true : !!spec.backface_culling;
+      material.backFaceCulling = resolvedSpec.backface_culling === undefined ? true : !!resolvedSpec.backface_culling;
 
-      if (spec.use_vertex_colors) {
+      if (resolvedSpec.use_vertex_colors) {
         material.diffuseColor = new BABYLON.Color3(1, 1, 1);
         material.useVertexColor = true;
         material.useVertexColors = true;
         mesh.useVertexColors = true;
         mesh.hasVertexAlpha = true;
-      } else if (spec.diffuse) {
-        material.diffuseColor = coerceColor3(spec.diffuse, material.diffuseColor);
+      } else if (resolvedSpec.diffuse) {
+        material.diffuseColor = coerceColor3(resolvedSpec.diffuse, material.diffuseColor);
       }
 
-      if (spec.specular !== undefined) {
-        material.specularColor = coerceColor3(spec.specular, new BABYLON.Color3(0, 0, 0));
+      if (resolvedSpec.specular !== undefined) {
+        material.specularColor = coerceColor3(resolvedSpec.specular, new BABYLON.Color3(0, 0, 0));
       }
 
-      if (spec.emissive !== undefined) {
-        material.emissiveColor = coerceColor3(spec.emissive, new BABYLON.Color3(0, 0, 0));
+      if (resolvedSpec.emissive !== undefined) {
+        material.emissiveColor = coerceColor3(resolvedSpec.emissive, new BABYLON.Color3(0, 0, 0));
       }
 
-      configureCommonMaterial(material, spec, mesh);
+      configureCommonMaterial(material, resolvedSpec, mesh);
       return material;
     }
 
@@ -960,7 +995,15 @@ HTMLWidgets.widget({
         return;
       }
 
-      registerEditableTarget(editableTargets, primitive, editableTargets.length, rootNode, "mesh");
+      registerEditableTarget(
+        editableTargets,
+        primitive,
+        editableTargets.length,
+        rootNode,
+        "mesh",
+        null,
+        {importedMeshes: importedMeshes || []}
+      );
 
       if (!importedMeshes || !importedMeshes.length) {
         return;
@@ -2025,6 +2068,116 @@ HTMLWidgets.widget({
       target.helper.material.emissiveColor = diffuse.scale(0.3);
     }
 
+    function addEditorLight(state, lightType) {
+      if (!state) {
+        return;
+      }
+
+      var index = nextEditorTargetIndex(state);
+      var position = defaultEditorLightPosition();
+      var primitive = {
+        type: "light3d",
+        light_type: lightType || "point",
+        name: uniqueEditorPrimitiveName(state, (lightType || "light") + "_light"),
+        position: vectorToArray(position),
+        direction: defaultEditorLightDirection(lightType || "point"),
+        intensity: 1,
+        diffuse: "#ffffff",
+        specular: "#ffffff",
+        enabled: true
+      };
+
+      if (primitive.light_type === "spot") {
+        primitive.angle = Math.PI / 3;
+        primitive.exponent = 1;
+      }
+
+      var created = createLight(primitive, primitive.name);
+      registerEditableTarget(
+        state.targets,
+        primitive,
+        index,
+        created.editorNode,
+        "light",
+        null,
+        {light: created.light, createdInEditor: true}
+      );
+      var target = state.targets[state.targets.length - 1];
+      target.helper = createLightHelper(target.node, target.primitive, target.name || target.id);
+      if (target.helper) {
+        target.helper.isPickable = true;
+        state.helpers.push(target.helper);
+      }
+      updateLightHelpers(state);
+      selectEditorTarget(state, target.id);
+      publishSceneEditorState(state);
+    }
+
+    function removeSelectedEditorLight(state) {
+      if (!state || !state.targets || !state.targets.length) {
+        return;
+      }
+
+      var selected = selectedEditorTarget(state);
+      if (!selected || selected.kind !== "light") {
+        return;
+      }
+
+      state.targets = state.targets.filter(function(target) {
+        return target.id !== selected.id;
+      });
+      if (state.helpers) {
+        state.helpers = state.helpers.filter(function(helper) {
+          return helper && helper !== selected.helper;
+        });
+      }
+      disposeEditorTarget(selected);
+      var fallback = selectedEditorTarget(state) || (state.targets.length ? state.targets[0] : null);
+      selectEditorTarget(state, fallback ? fallback.id : null);
+      publishSceneEditorState(state);
+    }
+
+    function addEditorPostprocess(state, type) {
+      if (!state) {
+        return;
+      }
+
+      if (!state.postprocess) {
+        state.postprocess = [];
+      }
+
+      var radius = currentSceneBounds && currentSceneBounds.radius ? currentSceneBounds.radius : 100;
+      if ((type || "depth_of_field") === "depth_of_field") {
+        state.postprocess.push({
+          type: "depth_of_field",
+          focus_distance: radius,
+          f_stop: 2,
+          focal_length: 50,
+          blur_level: "low"
+        });
+      }
+
+      applyEditorPostProcesses(state);
+      updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+      publishSceneEditorState(state);
+    }
+
+    function removeSelectedEditorPostprocess(state) {
+      if (!state || !state.postprocess || !state.postprocess.length || !state.ui || !state.ui.effectSelect) {
+        return;
+      }
+
+      var idx = Number(state.ui.effectSelect.value);
+      if (!isFinite(idx) || !state.postprocess[idx]) {
+        return;
+      }
+
+      state.postprocess.splice(idx, 1);
+      applyEditorPostProcesses(state);
+      updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+      publishSceneEditorState(state);
+    }
+
     function buildSceneEditorPayload(state) {
       var targets = state && state.targets ? state.targets : [];
       return {
@@ -2038,8 +2191,8 @@ HTMLWidgets.widget({
             name: target.name || null
           };
 
-          if (target.kind === "light") {
-            entry.light_type = target.primitive.light_type || "hemispheric";
+        if (target.kind === "light") {
+          entry.light_type = target.primitive.light_type || "hemispheric";
             if (target.node.position) {
               entry.position = vectorToArray(target.node.position);
             }
@@ -2070,12 +2223,21 @@ HTMLWidgets.widget({
             if (target.primitive.enabled !== undefined) {
               entry.enabled = target.primitive.enabled !== false;
             }
+            if (target.createdInEditor) {
+              entry.created_in_editor = true;
+            }
             return entry;
           }
 
           entry.position = vectorToArray(target.node.position);
           entry.rotation = nodeRotationArray(target.node);
           entry.scaling = vectorToArray(target.node.scaling || new BABYLON.Vector3(1, 1, 1));
+          if (target.primitive && target.primitive.material) {
+            entry.material = cloneMaterialSpec(target.primitive.material);
+          }
+          if (target.createdInEditor) {
+            entry.created_in_editor = true;
+          }
           return entry;
         }),
         selected: state.selectedId || null,
@@ -2095,7 +2257,7 @@ HTMLWidgets.widget({
         uiLayer.innerHTML =
           "<div style='font-weight:700; margin-bottom:6px;'>Scene Editor</div>" +
           "<div style='margin-bottom:8px; color:#475569;'>Click a mesh or light in the viewport, or select it below, then edit transforms and post-processing settings.</div>" +
-          "<details data-role='section-meshes' open style='margin-bottom:8px;'>" +
+          "<details data-role='section-meshes' style='margin-bottom:8px;'>" +
             "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Meshes</summary>" +
             "<div style='margin-top:8px;'>" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>Mesh target</label>" +
@@ -2108,9 +2270,49 @@ HTMLWidgets.widget({
               "<button type='button' data-role='mesh-toggle-gizmo' style='width:100%; border:0; border-radius:6px; background:#1d4ed8; color:white; padding:6px 10px; cursor:pointer;'>Hide Gizmo</button>" +
             "</div>" +
           "</details>" +
+          "<details data-role='section-materials' style='margin-bottom:8px;'>" +
+            "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Materials</summary>" +
+            "<div style='margin-top:8px;'>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Library</label>" +
+              "<select data-role='material-library' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'></select>" +
+              "<div style='display:flex; gap:6px; margin-bottom:8px;'>" +
+                "<button type='button' data-role='material-assign' style='flex:1; border:0; border-radius:6px; background:#0f766e; color:white; padding:6px 10px; cursor:pointer;'>Assign</button>" +
+                "<button type='button' data-role='material-save' style='flex:1; border:0; border-radius:6px; background:#1d4ed8; color:white; padding:6px 10px; cursor:pointer;'>Save As</button>" +
+              "</div>" +
+              "<input data-role='material-save-name' type='text' placeholder='library name' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;' />" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Material type</label>" +
+              "<select data-role='material-type' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
+                "<option value='standard'>standard</option>" +
+                "<option value='pbr'>pbr</option>" +
+              "</select>" +
+              "<label data-role='material-color-label' style='display:block; margin-bottom:4px; color:#334155;'>Diffuse color</label>" +
+              "<input data-role='material-color' type='color' value='#d9d9d9' style='width:100%; height:36px; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; padding:2px;' />" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Alpha <span data-role='material-alpha-value'>1</span></label>" +
+              "<input data-role='material-alpha' type='range' min='0' max='1' step='0.01' value='1' style='width:100%; margin-bottom:8px;' />" +
+              "<div data-role='material-pbr-fields' style='display:none;'>" +
+                "<label style='display:block; margin-bottom:4px; color:#334155;'>Metallic <span data-role='material-metallic-value'>0</span></label>" +
+                "<input data-role='material-metallic' type='range' min='0' max='1' step='0.01' value='0' style='width:100%; margin-bottom:8px;' />" +
+                "<label style='display:block; margin-bottom:4px; color:#334155;'>Roughness <span data-role='material-roughness-value'>1</span></label>" +
+                "<input data-role='material-roughness' type='range' min='0' max='1' step='0.01' value='1' style='width:100%; margin-bottom:8px;' />" +
+              "</div>" +
+              "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='material-wireframe' type='checkbox' /> Wireframe</label>" +
+              "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='material-backface' type='checkbox' checked /> Backface culling</label>" +
+            "</div>" +
+          "</details>" +
           "<details data-role='section-lights' open style='margin-bottom:8px;'>" +
             "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Lights</summary>" +
             "<div style='margin-top:8px;'>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>New light type</label>" +
+              "<select data-role='new-light-type' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
+                "<option value='point'>point</option>" +
+                "<option value='spot'>spot</option>" +
+                "<option value='directional'>directional</option>" +
+                "<option value='hemispheric'>hemispheric</option>" +
+              "</select>" +
+              "<div style='display:flex; gap:6px; margin-bottom:8px;'>" +
+                "<button type='button' data-role='light-add' style='flex:1; border:0; border-radius:6px; background:#0f766e; color:white; padding:6px 10px; cursor:pointer;'>Add Light</button>" +
+                "<button type='button' data-role='light-remove' style='flex:1; border:0; border-radius:6px; background:#991b1b; color:white; padding:6px 10px; cursor:pointer;'>Remove</button>" +
+              "</div>" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>Light target</label>" +
               "<select data-role='light-target' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'></select>" +
               "<div style='display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap;'>" +
@@ -2124,9 +2326,17 @@ HTMLWidgets.widget({
               "<button type='button' data-role='light-toggle-gizmo' style='width:100%; border:0; border-radius:6px; background:#1d4ed8; color:white; padding:6px 10px; cursor:pointer;'>Hide Gizmo</button>" +
             "</div>" +
           "</details>" +
-          "<details data-role='section-effects' open style='margin-bottom:8px;'>" +
+          "<details data-role='section-effects' style='margin-bottom:8px;'>" +
             "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Postprocessing</summary>" +
             "<div data-role='effects-panel' style='margin-top:8px;'>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>New effect</label>" +
+              "<select data-role='new-effect-type' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
+                "<option value='depth_of_field'>depth_of_field</option>" +
+              "</select>" +
+              "<div style='display:flex; gap:6px; margin-bottom:8px;'>" +
+                "<button type='button' data-role='effect-add' style='flex:1; border:0; border-radius:6px; background:#0f766e; color:white; padding:6px 10px; cursor:pointer;'>Add Effect</button>" +
+                "<button type='button' data-role='effect-remove' style='flex:1; border:0; border-radius:6px; background:#991b1b; color:white; padding:6px 10px; cursor:pointer;'>Remove</button>" +
+              "</div>" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>Effect</label>" +
               "<select data-role='effect-target' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'></select>" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>Focus distance <span data-role='focus-distance-value'></span></label>" +
@@ -2143,6 +2353,21 @@ HTMLWidgets.widget({
               "</select>" +
             "</div>" +
           "</details>" +
+          "<details data-role='section-snapshot' style='margin-bottom:8px;'>" +
+            "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Snapshot</summary>" +
+            "<div style='margin-top:8px;'>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Filename</label>" +
+              "<input data-role='snapshot-filename' type='text' value='scene.png' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;' />" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Format</label>" +
+              "<select data-role='snapshot-format' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
+                "<option value='png'>png</option>" +
+                "<option value='tif'>tif</option>" +
+                "<option value='svg'>svg</option>" +
+              "</select>" +
+              "<button type='button' data-role='snapshot-save' style='width:100%; border:0; border-radius:6px; background:#0f172a; color:white; padding:6px 10px; cursor:pointer;'>Save Snapshot</button>" +
+              "<div style='margin-top:6px; color:#64748b;'>Helper spheres and gizmos are hidden in exported images.</div>" +
+            "</div>" +
+          "</details>" +
           "<details data-role='section-log' style='margin-bottom:8px;'>" +
             "<summary style='cursor:pointer; font-weight:700; color:#0f172a;'>Scene State Log</summary>" +
             "<div style='margin-top:8px;'>" +
@@ -2153,12 +2378,36 @@ HTMLWidgets.widget({
 
         state.ui = {
           meshSection: uiLayer.querySelector("[data-role='section-meshes']"),
+          materialSection: uiLayer.querySelector("[data-role='section-materials']"),
           lightSection: uiLayer.querySelector("[data-role='section-lights']"),
           effectsSection: uiLayer.querySelector("[data-role='section-effects']"),
+          snapshotSection: uiLayer.querySelector("[data-role='section-snapshot']"),
           logSection: uiLayer.querySelector("[data-role='section-log']"),
           meshSelect: uiLayer.querySelector("[data-role='mesh-target']"),
+          materialLibrarySelect: uiLayer.querySelector("[data-role='material-library']"),
+          materialAssignButton: uiLayer.querySelector("[data-role='material-assign']"),
+          materialSaveButton: uiLayer.querySelector("[data-role='material-save']"),
+          materialSaveNameInput: uiLayer.querySelector("[data-role='material-save-name']"),
+          materialTypeSelect: uiLayer.querySelector("[data-role='material-type']"),
+          materialColorLabel: uiLayer.querySelector("[data-role='material-color-label']"),
+          materialColorInput: uiLayer.querySelector("[data-role='material-color']"),
+          materialAlphaSlider: uiLayer.querySelector("[data-role='material-alpha']"),
+          materialAlphaValue: uiLayer.querySelector("[data-role='material-alpha-value']"),
+          materialPbrFields: uiLayer.querySelector("[data-role='material-pbr-fields']"),
+          materialMetallicSlider: uiLayer.querySelector("[data-role='material-metallic']"),
+          materialMetallicValue: uiLayer.querySelector("[data-role='material-metallic-value']"),
+          materialRoughnessSlider: uiLayer.querySelector("[data-role='material-roughness']"),
+          materialRoughnessValue: uiLayer.querySelector("[data-role='material-roughness-value']"),
+          materialWireframeInput: uiLayer.querySelector("[data-role='material-wireframe']"),
+          materialBackfaceInput: uiLayer.querySelector("[data-role='material-backface']"),
           lightSelect: uiLayer.querySelector("[data-role='light-target']"),
+          newLightTypeSelect: uiLayer.querySelector("[data-role='new-light-type']"),
+          lightAddButton: uiLayer.querySelector("[data-role='light-add']"),
+          lightRemoveButton: uiLayer.querySelector("[data-role='light-remove']"),
           effectSelect: uiLayer.querySelector("[data-role='effect-target']"),
+          newEffectTypeSelect: uiLayer.querySelector("[data-role='new-effect-type']"),
+          effectAddButton: uiLayer.querySelector("[data-role='effect-add']"),
+          effectRemoveButton: uiLayer.querySelector("[data-role='effect-remove']"),
           intensityLabel: uiLayer.querySelector("[data-role='intensity-label']"),
           intensityValue: uiLayer.querySelector("[data-role='intensity-value']"),
           intensitySlider: uiLayer.querySelector("[data-role='intensity-slider']"),
@@ -2166,6 +2415,9 @@ HTMLWidgets.widget({
           diffuseColorInput: uiLayer.querySelector("[data-role='diffuse-color']"),
           meshToggleButton: uiLayer.querySelector("[data-role='mesh-toggle-gizmo']"),
           lightToggleButton: uiLayer.querySelector("[data-role='light-toggle-gizmo']"),
+          snapshotFilenameInput: uiLayer.querySelector("[data-role='snapshot-filename']"),
+          snapshotFormatSelect: uiLayer.querySelector("[data-role='snapshot-format']"),
+          snapshotSaveButton: uiLayer.querySelector("[data-role='snapshot-save']"),
           focusDistanceSlider: uiLayer.querySelector("[data-role='focus-distance-slider']"),
           focusDistanceValue: uiLayer.querySelector("[data-role='focus-distance-value']"),
           fStopSlider: uiLayer.querySelector("[data-role='f-stop-slider']"),
@@ -2182,8 +2434,102 @@ HTMLWidgets.widget({
         state.ui.meshSelect.addEventListener("change", function(evt) {
           state.selectedId = evt.target.value;
           state.sectionOpen.meshes = true;
+          state.sectionOpen.materials = true;
           syncEditorGizmoState(state);
           updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+        });
+
+        function updateSelectedMaterial(mutator) {
+          var target = selectedEditorTarget(state);
+          if (!target || target.kind !== "mesh") {
+            return;
+          }
+          var spec = editableMaterialSpec(target);
+          mutator(spec, target);
+          target.primitive.material = spec;
+          applyMaterialToEditorTarget(target);
+          updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+          publishSceneEditorState(state);
+        }
+
+        state.ui.materialTypeSelect.addEventListener("change", function(evt) {
+          updateSelectedMaterial(function(spec) {
+            var nextType = evt.target.value === "pbr" ? "pbr" : "standard";
+            var alpha = spec.alpha;
+            var wireframe = !!spec.wireframe;
+            var backface = spec.backface_culling !== false;
+            var color = spec.type === "pbr" ? spec.base_color : spec.diffuse;
+            var next = defaultMaterialSpec(nextType);
+            next.alpha = alpha === undefined ? next.alpha : alpha;
+            next.wireframe = wireframe;
+            next.backface_culling = backface;
+            if (nextType === "pbr") {
+              next.base_color = color || "#ffffff";
+            } else {
+              next.diffuse = color || "#d9d9d9";
+            }
+            Object.keys(spec).forEach(function(key) {
+              delete spec[key];
+            });
+            Object.keys(next).forEach(function(key) {
+              spec[key] = next[key];
+            });
+          });
+        });
+
+        state.ui.materialColorInput.addEventListener("input", function(evt) {
+          updateSelectedMaterial(function(spec) {
+            if (spec.type === "pbr") {
+              spec.base_color = evt.target.value;
+            } else {
+              spec.diffuse = evt.target.value;
+            }
+          });
+        });
+
+        state.ui.materialAlphaSlider.addEventListener("input", function(evt) {
+          updateSelectedMaterial(function(spec) {
+            spec.alpha = Number(evt.target.value);
+          });
+        });
+
+        state.ui.materialMetallicSlider.addEventListener("input", function(evt) {
+          updateSelectedMaterial(function(spec) {
+            spec.type = "pbr";
+            spec.metallic = Number(evt.target.value);
+          });
+        });
+
+        state.ui.materialRoughnessSlider.addEventListener("input", function(evt) {
+          updateSelectedMaterial(function(spec) {
+            spec.type = "pbr";
+            spec.roughness = Number(evt.target.value);
+          });
+        });
+
+        state.ui.materialWireframeInput.addEventListener("change", function(evt) {
+          updateSelectedMaterial(function(spec) {
+            spec.wireframe = !!evt.target.checked;
+          });
+        });
+
+        state.ui.materialBackfaceInput.addEventListener("change", function(evt) {
+          updateSelectedMaterial(function(spec) {
+            spec.backface_culling = !!evt.target.checked;
+          });
+        });
+
+        state.ui.materialAssignButton.addEventListener("click", function() {
+          assignLibraryMaterialToSelectedMesh(state, state.ui.materialLibrarySelect.value);
+        });
+
+        state.ui.materialSaveButton.addEventListener("click", function() {
+          var name = (state.ui.materialSaveNameInput.value || "").trim();
+          if (!name) {
+            return;
+          }
+          saveSelectedMaterialToLibrary(state, name);
+          state.ui.materialSaveNameInput.value = name;
         });
 
         state.ui.lightSelect.addEventListener("change", function(evt) {
@@ -2191,6 +2537,15 @@ HTMLWidgets.widget({
           state.sectionOpen.lights = true;
           syncEditorGizmoState(state);
           updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+        });
+
+        state.ui.lightAddButton.addEventListener("click", function() {
+          state.sectionOpen.lights = true;
+          addEditorLight(state, state.ui.newLightTypeSelect.value || "point");
+        });
+
+        state.ui.lightRemoveButton.addEventListener("click", function() {
+          removeSelectedEditorLight(state);
         });
 
         state.ui.meshModeButtons.forEach(function(button) {
@@ -2255,6 +2610,15 @@ HTMLWidgets.widget({
           updateSceneEditorPanel(state, buildSceneEditorPayload(state));
         });
 
+        state.ui.effectAddButton.addEventListener("click", function() {
+          state.sectionOpen.effects = true;
+          addEditorPostprocess(state, state.ui.newEffectTypeSelect.value || "depth_of_field");
+        });
+
+        state.ui.effectRemoveButton.addEventListener("click", function() {
+          removeSelectedEditorPostprocess(state);
+        });
+
         state.ui.focusDistanceSlider.addEventListener("input", function(evt) {
           var idx = Number(state.ui.effectSelect.value);
           if (!isFinite(idx) || !state.postprocess[idx]) {
@@ -2299,14 +2663,42 @@ HTMLWidgets.widget({
           publishSceneEditorState(state);
         });
 
-        [state.ui.meshSection, state.ui.lightSection, state.ui.effectsSection, state.ui.logSection].forEach(function(section) {
+        state.ui.snapshotSaveButton.addEventListener("click", function() {
+          if (!state.widgetId) {
+            return;
+          }
+          setSnapshotPreviewVisible(state, false);
+          pushShinyInputValue(
+            state.widgetId + "_snapshot_request",
+            {
+              filename: state.ui.snapshotFilenameInput.value || "scene.png",
+              format: state.ui.snapshotFormatSelect.value || "png",
+              vwidth: engine.getRenderWidth ? engine.getRenderWidth() : canvas.width,
+              vheight: engine.getRenderHeight ? engine.getRenderHeight() : canvas.height
+            }
+          );
+        });
+
+        state.ui.snapshotFormatSelect.addEventListener("change", function(evt) {
+          var format = evt.target.value || "png";
+          var current = state.ui.snapshotFilenameInput.value || "scene.png";
+          if (/\.[A-Za-z0-9]+$/.test(current)) {
+            state.ui.snapshotFilenameInput.value = current.replace(/\.[A-Za-z0-9]+$/, "." + format);
+          } else {
+            state.ui.snapshotFilenameInput.value = current + "." + format;
+          }
+        });
+
+        [state.ui.meshSection, state.ui.materialSection, state.ui.lightSection, state.ui.effectsSection, state.ui.snapshotSection, state.ui.logSection].forEach(function(section) {
           if (!section) {
             return;
           }
           section.addEventListener("toggle", function() {
             state.sectionOpen.meshes = !!state.ui.meshSection.open;
+            state.sectionOpen.materials = !!state.ui.materialSection.open;
             state.sectionOpen.lights = !!state.ui.lightSection.open;
             state.sectionOpen.effects = !!state.ui.effectsSection.open;
+            state.sectionOpen.snapshot = !!state.ui.snapshotSection.open;
             state.sectionOpen.log = !!state.ui.logSection.open;
           });
         });
@@ -2322,8 +2714,10 @@ HTMLWidgets.widget({
       var meshTargets = editorTargetsByKind(state, "mesh");
       var lightTargets = editorTargetsByKind(state, "light");
       state.ui.meshSection.open = state.sectionOpen.meshes !== false;
+      state.ui.materialSection.open = state.sectionOpen.materials !== false;
       state.ui.lightSection.open = state.sectionOpen.lights !== false;
       state.ui.effectsSection.open = state.sectionOpen.effects !== false;
+      state.ui.snapshotSection.open = state.sectionOpen.snapshot === true;
       state.ui.logSection.open = state.sectionOpen.log === true;
 
       state.ui.meshSelect.innerHTML = "";
@@ -2360,6 +2754,20 @@ HTMLWidgets.widget({
 
       state.ui.meshSelect.disabled = !meshTargets.length;
       state.ui.lightSelect.disabled = !lightTargets.length;
+      state.ui.lightRemoveButton.disabled = !(selected && selected.kind === "light");
+      state.ui.materialLibrarySelect.innerHTML = "";
+      sceneMaterialNames().forEach(function(name) {
+        var option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        state.ui.materialLibrarySelect.appendChild(option);
+      });
+      if (!state.ui.materialLibrarySelect.options.length) {
+        var libraryOption = document.createElement("option");
+        libraryOption.value = "";
+        libraryOption.textContent = "No registered materials";
+        state.ui.materialLibrarySelect.appendChild(libraryOption);
+      }
 
       state.ui.meshModeButtons.forEach(function(button) {
         var mode = button.getAttribute("data-mode");
@@ -2402,6 +2810,41 @@ HTMLWidgets.widget({
         );
       }
 
+      var showMaterial = !!selected && selected.kind === "mesh";
+      state.ui.materialTypeSelect.disabled = !showMaterial;
+      state.ui.materialLibrarySelect.disabled = !showMaterial || sceneMaterialNames().length === 0;
+      state.ui.materialAssignButton.disabled = !showMaterial || sceneMaterialNames().length === 0;
+      state.ui.materialSaveButton.disabled = !showMaterial;
+      state.ui.materialSaveNameInput.disabled = !showMaterial;
+      state.ui.materialColorInput.disabled = !showMaterial;
+      state.ui.materialAlphaSlider.disabled = !showMaterial;
+      state.ui.materialMetallicSlider.disabled = !showMaterial;
+      state.ui.materialRoughnessSlider.disabled = !showMaterial;
+      state.ui.materialWireframeInput.disabled = !showMaterial;
+      state.ui.materialBackfaceInput.disabled = !showMaterial;
+      state.ui.materialSection.style.display = meshTargets.length ? "block" : "none";
+      if (showMaterial) {
+        var materialSpec = editableMaterialSpec(selected);
+        var isPbr = materialSpec && materialSpec.type === "pbr";
+        state.ui.materialTypeSelect.value = isPbr ? "pbr" : "standard";
+        state.ui.materialColorLabel.textContent = isPbr ? "Base color" : "Diffuse color";
+        state.ui.materialColorInput.value = color3ToHex(isPbr ? materialSpec.base_color : materialSpec.diffuse, "#d9d9d9");
+        state.ui.materialAlphaSlider.value = String(Number(materialSpec.alpha === undefined ? 1 : materialSpec.alpha));
+        state.ui.materialAlphaValue.textContent = formatRNumber(Number(materialSpec.alpha === undefined ? 1 : materialSpec.alpha));
+        state.ui.materialPbrFields.style.display = isPbr ? "block" : "none";
+        state.ui.materialMetallicSlider.value = String(Number(materialSpec.metallic === undefined ? 0 : materialSpec.metallic));
+        state.ui.materialMetallicValue.textContent = formatRNumber(Number(materialSpec.metallic === undefined ? 0 : materialSpec.metallic));
+        state.ui.materialRoughnessSlider.value = String(Number(materialSpec.roughness === undefined ? 1 : materialSpec.roughness));
+        state.ui.materialRoughnessValue.textContent = formatRNumber(Number(materialSpec.roughness === undefined ? 1 : materialSpec.roughness));
+        state.ui.materialWireframeInput.checked = !!materialSpec.wireframe;
+        state.ui.materialBackfaceInput.checked = materialSpec.backface_culling !== false;
+        if (!state.ui.materialSaveNameInput.value) {
+          state.ui.materialSaveNameInput.value = (selected.name || "material").replace(/\s+/g, "_").toLowerCase();
+        }
+      } else {
+        state.ui.materialPbrFields.style.display = "none";
+      }
+
       var gizmoLabel = state.gizmosVisible === false ? "Show Gizmo" : "Hide Gizmo";
       state.ui.meshToggleButton.disabled = !meshTargets.length;
       state.ui.lightToggleButton.disabled = !lightTargets.length;
@@ -2423,7 +2866,7 @@ HTMLWidgets.widget({
         state.ui.effectSelect.appendChild(option);
       }
       state.ui.effectSelect.disabled = !effects.length;
-      state.ui.effectsSection.style.display = effects.length ? "block" : "none";
+      state.ui.effectRemoveButton.disabled = !effects.length;
       if (effects.length) {
         var effectIndex = Number(state.ui.effectSelect.value);
         if (!isFinite(effectIndex) || !effects[effectIndex]) {
@@ -2441,6 +2884,13 @@ HTMLWidgets.widget({
         state.ui.focalLengthSlider.value = String(Number(effect.focal_length || 50));
         state.ui.focalLengthValue.textContent = formatRNumber(Number(effect.focal_length || 50));
         state.ui.blurLevelSelect.value = effect.blur_level || "low";
+      } else {
+        state.ui.focusDistanceSlider.value = "0";
+        state.ui.focusDistanceValue.textContent = "";
+        state.ui.fStopSlider.value = "2";
+        state.ui.fStopValue.textContent = "";
+        state.ui.focalLengthSlider.value = "50";
+        state.ui.focalLengthValue.textContent = "";
       }
 
       state.ui.stateText.value = JSON.stringify(payload, null, 2);
@@ -2532,6 +2982,67 @@ HTMLWidgets.widget({
       }
     }
 
+    function setSnapshotPreviewVisible(state, visible) {
+      if (!state || state.mode !== "edit_scene3d") {
+        return;
+      }
+
+      if (visible) {
+        if (state.snapshotPreviewRestore) {
+          if (state.snapshotPreviewRestore.uiDisplay !== undefined) {
+            uiLayer.style.display = state.snapshotPreviewRestore.uiDisplay;
+          }
+          if (state.snapshotPreviewRestore.legendDisplay !== undefined) {
+            legendLayer.style.display = state.snapshotPreviewRestore.legendDisplay;
+          }
+        }
+        if (state.helpers && state.helpers.length) {
+          state.helpers.forEach(function(helper) {
+            if (helper) {
+              helper.setEnabled(true);
+            }
+          });
+        }
+        syncEditorGizmoState(state);
+        state.snapshotPreviewRestore = null;
+        if (state.snapshotPreviewHandle) {
+          window.clearTimeout(state.snapshotPreviewHandle);
+          state.snapshotPreviewHandle = null;
+        }
+        return;
+      }
+
+      state.snapshotPreviewRestore = {
+        uiDisplay: uiLayer.style.display,
+        legendDisplay: legendLayer.style.display
+      };
+
+      uiLayer.style.display = "none";
+      legendLayer.style.display = "none";
+
+      if (state.helpers && state.helpers.length) {
+        state.helpers.forEach(function(helper) {
+          if (helper) {
+            helper.setEnabled(false);
+          }
+        });
+      }
+
+      if (state.gizmoManager) {
+        attachEditorTarget(state, null);
+        state.gizmoManager.positionGizmoEnabled = false;
+        state.gizmoManager.rotationGizmoEnabled = false;
+        state.gizmoManager.scaleGizmoEnabled = false;
+      }
+
+      if (state.snapshotPreviewHandle) {
+        window.clearTimeout(state.snapshotPreviewHandle);
+      }
+      state.snapshotPreviewHandle = window.setTimeout(function() {
+        setSnapshotPreviewVisible(state, true);
+      }, 1800);
+    }
+
     function initializeInteraction(interaction, primaryMesh) {
       if (activeInteractionState && activeInteractionState.dispose) {
         activeInteractionState.dispose();
@@ -2555,10 +3066,19 @@ HTMLWidgets.widget({
             mode: interaction.mode,
             widgetId: el.id || null,
             targets: editableTargets || [],
+            postprocess: cloneScenePostprocesses(currentSceneOptions && currentSceneOptions.postprocess ? currentSceneOptions.postprocess : []),
             gizmoManager: null,
             selectedId: editableTargets && editableTargets.length ? editableTargets[0].id : null,
             gizmoMode: "translate",
-            gizmosVisible: false
+            gizmosVisible: false,
+            sectionOpen: {
+              meshes: false,
+              materials: false,
+              lights: true,
+              effects: false,
+              snapshot: false,
+              log: false
+            }
           };
           publishSceneEditorState(activeInteractionState);
           return activeInteractionState;
@@ -2572,9 +3092,11 @@ HTMLWidgets.widget({
           targets: editableTargets || [],
           postprocess: cloneScenePostprocesses(currentSceneOptions && currentSceneOptions.postprocess ? currentSceneOptions.postprocess : []),
           sectionOpen: {
-            meshes: true,
+            meshes: false,
+            materials: false,
             lights: true,
-            effects: true,
+            effects: false,
+            snapshot: false,
             log: false
           },
           helpers: [],
@@ -2637,6 +3159,9 @@ HTMLWidgets.widget({
           var section = targetSelectionSection(selectedTarget);
           if (section) {
             editorState.sectionOpen[section] = true;
+          }
+          if (selectedTarget.kind === "mesh") {
+            editorState.sectionOpen.materials = true;
           }
           syncEditorGizmoState(editorState);
           updateSceneEditorPanel(editorState, buildSceneEditorPayload(editorState));
@@ -2877,6 +3402,248 @@ HTMLWidgets.widget({
       }
 
       targets.push(target);
+    }
+
+    function nextEditorTargetIndex(state) {
+      if (!state || !state.targets || !state.targets.length) {
+        return 0;
+      }
+
+      return state.targets.reduce(function(maxIndex, target) {
+        return Math.max(maxIndex, Number(target.index) || 0);
+      }, -1) + 1;
+    }
+
+    function uniqueEditorPrimitiveName(state, prefix) {
+      var stem = prefix || "object";
+      var taken = {};
+
+      if (state && state.targets) {
+        state.targets.forEach(function(target) {
+          if (target && target.primitive && target.primitive.name) {
+            taken[target.primitive.name] = true;
+          }
+        });
+      }
+
+      var index = 1;
+      var candidate = stem;
+      while (taken[candidate]) {
+        candidate = stem + "_" + index;
+        index += 1;
+      }
+      return candidate;
+    }
+
+    function defaultEditorLightPosition() {
+      var radius = currentSceneBounds && currentSceneBounds.radius ? currentSceneBounds.radius : 1;
+      var center = currentSceneBounds && currentSceneBounds.center ? currentSceneBounds.center : new BABYLON.Vector3(0, 0, 0);
+      return center.add(new BABYLON.Vector3(radius * 0.8, radius * 0.8, radius * 0.8));
+    }
+
+    function defaultEditorLightDirection(lightType) {
+      if (lightType === "hemispheric") {
+        return [0, 1, 0];
+      }
+      return [0, -1, 0];
+    }
+
+    function cloneMaterialSpec(spec) {
+      if (!spec) {
+        return null;
+      }
+
+      try {
+        return JSON.parse(JSON.stringify(spec));
+      } catch (err) {
+        return null;
+      }
+    }
+
+    function sceneMaterialNames() {
+      return Object.keys(sceneMaterialLibrary()).sort();
+    }
+
+    function sceneMaterialByName(name) {
+      if (!name) {
+        return null;
+      }
+
+      var library = sceneMaterialLibrary();
+      if (!Object.prototype.hasOwnProperty.call(library, name)) {
+        return null;
+      }
+
+      return cloneMaterialSpec(resolveMaterialSpec(library[name])) || cloneMaterialSpec(library[name]);
+    }
+
+    function defaultMaterialSpec(type) {
+      if (type === "pbr") {
+        return {
+          type: "pbr",
+          base_color: "#ffffff",
+          metallic: 0,
+          roughness: 1,
+          alpha: 1,
+          wireframe: false,
+          backface_culling: true,
+          unlit: false
+        };
+      }
+
+      return {
+        type: "standard",
+        diffuse: "#d9d9d9",
+        specular: "#000000",
+        alpha: 1,
+        wireframe: false,
+        backface_culling: true
+      };
+    }
+
+    function editableMaterialSpec(target) {
+      if (!target || target.kind !== "mesh") {
+        return null;
+      }
+
+      var rawSpec = target.primitive && target.primitive.material ? target.primitive.material : legacyMaterialSpec(target.primitive);
+      var existing = cloneMaterialSpec(resolveMaterialSpec(rawSpec)) || cloneMaterialSpec(rawSpec);
+      if (!existing) {
+        existing = defaultMaterialSpec("standard");
+      }
+
+      if (!existing.type) {
+        existing.type = "standard";
+      }
+
+      if (existing.type === "pbr") {
+        if (existing.base_color === undefined && existing.albedo !== undefined) {
+          existing.base_color = existing.albedo;
+        }
+        if (existing.base_color === undefined) {
+          existing.base_color = "#ffffff";
+        }
+        if (existing.metallic === undefined) {
+          existing.metallic = 0;
+        }
+        if (existing.roughness === undefined) {
+          existing.roughness = 1;
+        }
+      } else {
+        existing.type = "standard";
+        if (existing.diffuse === undefined) {
+          existing.diffuse = target.primitive && target.primitive.color ? target.primitive.color : "#d9d9d9";
+        }
+        if (existing.specular === undefined) {
+          existing.specular = target.primitive && target.primitive.specularity ? target.primitive.specularity : "#000000";
+        }
+      }
+
+      if (existing.alpha === undefined) {
+        existing.alpha = target.primitive && target.primitive.alpha !== undefined ? Number(target.primitive.alpha) : 1;
+      }
+      if (existing.wireframe === undefined) {
+        existing.wireframe = !!(target.primitive && target.primitive.wireframe);
+      }
+      if (existing.backface_culling === undefined) {
+        existing.backface_culling = true;
+      }
+
+      return existing;
+    }
+
+    function assignLibraryMaterialToSelectedMesh(state, materialName) {
+      var target = selectedEditorTarget(state);
+      var materialSpec = sceneMaterialByName(materialName);
+      if (!target || target.kind !== "mesh" || !materialSpec) {
+        return;
+      }
+
+      target.primitive.material = materialSpec;
+      applyMaterialToEditorTarget(target);
+      updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+      publishSceneEditorState(state);
+    }
+
+    function saveSelectedMaterialToLibrary(state, materialName) {
+      var target = selectedEditorTarget(state);
+      if (!target || target.kind !== "mesh" || !materialName) {
+        return;
+      }
+
+      var materialSpec = editableMaterialSpec(target);
+      if (!materialSpec) {
+        return;
+      }
+
+      if (!currentSceneOptions) {
+        currentSceneOptions = {};
+      }
+      if (!currentSceneOptions.materials || typeof currentSceneOptions.materials !== "object") {
+        currentSceneOptions.materials = {};
+      }
+      currentSceneOptions.materials[materialName] = cloneMaterialSpec(materialSpec);
+
+      if (state.widgetId) {
+        pushShinyInputValue(
+          state.widgetId + "_material_library_save",
+          {
+            name: materialName,
+            material: cloneMaterialSpec(materialSpec)
+          }
+        );
+      }
+
+      updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+      publishSceneEditorState(state);
+    }
+
+    function applyMaterialToEditorTarget(target) {
+      if (!target || target.kind !== "mesh") {
+        return;
+      }
+
+      if (!target.primitive) {
+        return;
+      }
+
+      if (target.importedMeshes && target.importedMeshes.length) {
+        target.importedMeshes.forEach(function(mesh) {
+          applyMaterial(mesh, {material: target.primitive.material});
+        });
+        return;
+      }
+
+      if (target.node && target.node.material !== undefined) {
+        applyMaterial(target.node, target.primitive);
+      }
+    }
+
+    function disposeEditorTarget(target) {
+      if (!target) {
+        return;
+      }
+
+      if (target.helper && target.helper.dispose) {
+        target.helper.dispose();
+      }
+      if (target.light && target.light.dispose) {
+        target.light.dispose();
+      }
+      if (target.node && target.node.dispose) {
+        target.node.dispose();
+      }
+    }
+
+    function selectEditorTarget(state, targetId) {
+      if (!state) {
+        return;
+      }
+
+      state.selectedId = targetId || null;
+      ensureEditorMode(state);
+      syncEditorGizmoState(state);
+      updateSceneEditorPanel(state, buildSceneEditorPayload(state));
     }
 
     function createLight(primitive, name) {

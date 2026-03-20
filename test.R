@@ -180,7 +180,35 @@ scene <- babylon(
 state <- edit_scene3d(scene)
 scene <- apply_scene_state(scene, state = state)
 scene2 <- apply_scene_state(scene, state)
-snapshot3d("lights-demo.png", widget = scene2)
+snapshot3d("lights-demo.png", widget = scene)
+
+scene <- babylon(
+  data = list(
+    as_babylon_mesh(mesh, color = "gray75"),
+    as_babylon_light(
+      type = "point",
+      name = "key",
+      position = c(100, 80, 120),
+      intensity = 0.8,
+      diffuse = "#ffd166"
+    )
+  ),
+  scene = list(
+    postprocess = list(
+      dof3d(
+        focus_distance = 200,
+        f_stop = 2,
+        focal_length = 50,
+        blur_level = "medium"
+      )
+    )
+  )
+)
+
+state <- edit_scene3d(scene)
+scene <- apply_scene_state(scene, state = state)
+snapshot3d("dof-scene.png", widget = scene)
+
 
 #multiwindow w sync
 paired_scene3d(
@@ -292,9 +320,7 @@ babylon(
 )
 
 
-# - lights: just kinda ok
-# - gizmo support on lights and meshes: hard to use
-# - camera focus sharpness and other postprocessing
+
 
 #done
 # - heatmap/meshdist/wireframe
@@ -302,5 +328,15 @@ babylon(
 # - movies
 # - multiwindow
 # - digitize parity
+# - gizmo support on lights and meshes: hard to use
+# - camera focus sharpness and other postprocessing
 
-
+# scale bars
+# lighting portrait presets
+# add lights & postprpcessoing effects in gui
+# material support, adding in gui
+# take the picture now in gui
+# tif support
+# svg support
+# shadow opacity
+# clip away submeshes/ parts of the scene

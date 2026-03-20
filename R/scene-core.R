@@ -38,7 +38,9 @@ babylon <- function(
 
   extracted <- extract_scene_dependencies(data)
   data <- extracted$value
-  dependencies <- htmltools::resolveDependencies(extracted$dependencies)
+  scene_extracted <- extract_scene_dependencies(scene, extracted$dependencies)
+  scene <- scene_extracted$value
+  dependencies <- htmltools::resolveDependencies(scene_extracted$dependencies)
 
   htmlwidgets::createWidget(
     name = "babylon",
@@ -174,6 +176,8 @@ normalize_scene <- function(x) {
   if (!is.null(x$postprocess)) {
     x$postprocess <- normalize_scene_postprocesses(x$postprocess)
   }
+
+  x$materials <- normalize_scene_material_library(x$materials %||% NULL)
 
   x
 }
