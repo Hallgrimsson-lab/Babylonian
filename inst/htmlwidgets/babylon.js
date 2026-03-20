@@ -1552,16 +1552,11 @@ HTMLWidgets.widget({
         if (!entry || !entry.mesh) {
           return;
         }
-        if (entry.clippedMaterial && Object.prototype.hasOwnProperty.call(entry.clippedMaterial, "clipPlane")) {
-          entry.clippedMaterial.clipPlane = null;
-          entry.clippedMaterial.clipPlane2 = null;
-          entry.clippedMaterial.clipPlane3 = null;
+        if (entry.beforeRenderObserver && entry.mesh.onBeforeRenderObservable) {
+          entry.mesh.onBeforeRenderObservable.remove(entry.beforeRenderObserver);
         }
-        if (entry.originalMaterial !== undefined) {
-          entry.mesh.material = entry.originalMaterial;
-        }
-        if (entry.clippedMaterial && entry.clippedMaterial.dispose) {
-          entry.clippedMaterial.dispose();
+        if (entry.afterRenderObserver && entry.mesh.onAfterRenderObservable) {
+          entry.mesh.onAfterRenderObservable.remove(entry.afterRenderObserver);
         }
       });
       activeClippedMeshes = [];
@@ -2239,8 +2234,8 @@ HTMLWidgets.widget({
     }
 
     function selectedMeshRuntimeMaterialName(state) {
-      var target = selectedEditorTarget(state);
-      if (!target || target.kind !== "mesh") {
+      var target = selectedMeshTarget(state);
+      if (!target) {
         return null;
       }
 
@@ -2310,29 +2305,31 @@ HTMLWidgets.widget({
       var clipPlaneY = new BABYLON.Plane(0, 1, 0, -(isFinite(y) ? y : center.y));
       var clipPlaneZ = new BABYLON.Plane(0, 0, 1, -(isFinite(z) ? z : center.z));
 
-      targetMeshes.forEach(function(mesh, meshIndex) {
+      targetMeshes.forEach(function(mesh) {
         if (!mesh) {
           return;
         }
-        var clippedMaterial = mesh.material;
-        if (!clippedMaterial) {
-          return;
+        var beforeRenderObserver = null;
+        var afterRenderObserver = null;
+        if (mesh.onBeforeRenderObservable) {
+          beforeRenderObserver = mesh.onBeforeRenderObservable.add(function() {
+            scene.clipPlane = clipPlaneX;
+            scene.clipPlane2 = clipPlaneY;
+            scene.clipPlane3 = clipPlaneZ;
+          });
         }
-        if (typeof clippedMaterial.clone === "function") {
-          clippedMaterial = clippedMaterial.clone((clippedMaterial.name || ("clipped-material-" + meshIndex)) + "-clip");
+        if (mesh.onAfterRenderObservable) {
+          afterRenderObserver = mesh.onAfterRenderObservable.add(function() {
+            scene.clipPlane = null;
+            scene.clipPlane2 = null;
+            scene.clipPlane3 = null;
+          });
         }
-        if (!clippedMaterial) {
-          return;
-        }
-        clippedMaterial.clipPlane = clipPlaneX;
-        clippedMaterial.clipPlane2 = clipPlaneY;
-        clippedMaterial.clipPlane3 = clipPlaneZ;
         activeClippedMeshes.push({
           mesh: mesh,
-          originalMaterial: mesh.material,
-          clippedMaterial: clippedMaterial
+          beforeRenderObserver: beforeRenderObserver,
+          afterRenderObserver: afterRenderObserver
         });
-        mesh.material = clippedMaterial;
       });
     }
 
@@ -2981,8 +2978,8 @@ HTMLWidgets.widget({
             "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Clipping</summary>" +
             "<div style='margin-top:8px; margin-left:10px;'>" +
               "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='clipping-enabled' type='checkbox' /> Enable clipping</label>" +
-              "<label style='display:block; margin-bottom:4px; color:#334155;'>Material</label>" +
-              "<select data-role='clipping-material' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'></select>" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Active mesh</label>" +
+              "<select data-role='clipping-material' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#f8fafc; font:inherit;' disabled></select>" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>Plane X</label>" +
               "<input data-role='clipping-x' type='range' min='-1' max='1' step='0.01' value='1' style='width:100%; margin-bottom:8px;' />" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>Plane Y</label>" +
@@ -3382,26 +3379,22 @@ HTMLWidgets.widget({
 
         function updateClippingFromInputs() {
           var enabled = !!state.ui.clippingEnabledInput.checked;
-          var material = state.ui.clippingMaterialSelect.value || selectedMeshRuntimeMaterialName(state) || null;
           var x = Number(state.ui.clippingXSlider.value);
           var y = Number(state.ui.clippingYSlider.value);
           var z = Number(state.ui.clippingZSlider.value);
 
           state.clipping = {
             enabled: enabled,
-            material: material,
             x: isFinite(x) ? x : 1,
             y: isFinite(y) ? y : 0,
             z: isFinite(z) ? z : 0
           };
-          state.clippingSelectionMode = "manual";
           applyEditorClipping(state);
           updateSceneEditorPanel(state, buildSceneEditorPayload(state));
           publishSceneEditorState(state);
         }
 
         state.ui.clippingEnabledInput.addEventListener("change", updateClippingFromInputs);
-        state.ui.clippingMaterialSelect.addEventListener("change", updateClippingFromInputs);
         state.ui.clippingXSlider.addEventListener("input", updateClippingFromInputs);
         state.ui.clippingYSlider.addEventListener("input", updateClippingFromInputs);
         state.ui.clippingZSlider.addEventListener("input", updateClippingFromInputs);
@@ -3587,21 +3580,13 @@ HTMLWidgets.widget({
       state.ui.scaleBarLengthInput.disabled = scaleBarSpec.enabled !== true;
       state.ui.scaleBarLengthInput.value = scaleBarSpec.length !== undefined ? String(Number(scaleBarSpec.length)) : "1";
 
-      var runtimeMaterials = sceneRuntimeMaterialNames();
-      var activeMaterialName = selectedMeshRuntimeMaterialName(state);
+      var activeMeshTarget = selectedMeshTarget(state);
       state.ui.clippingMaterialSelect.innerHTML = "";
-      runtimeMaterials.forEach(function(name) {
-        var option = document.createElement("option");
-        option.value = name;
-        option.textContent = name;
-        state.ui.clippingMaterialSelect.appendChild(option);
-      });
-      if (!runtimeMaterials.length) {
-        var clipOption = document.createElement("option");
-        clipOption.value = "";
-        clipOption.textContent = "No materials";
-        state.ui.clippingMaterialSelect.appendChild(clipOption);
-      }
+      var clipOption = document.createElement("option");
+      clipOption.value = activeMeshTarget ? activeMeshTarget.id : "";
+      clipOption.textContent = activeMeshTarget ? activeMeshTarget.label : "No active mesh";
+      clipOption.selected = true;
+      state.ui.clippingMaterialSelect.appendChild(clipOption);
       var clippingCenter = currentSceneBounds && currentSceneBounds.center ? currentSceneBounds.center : {x: 0, y: 0, z: 0};
       var clippingRadius = currentSceneBounds && currentSceneBounds.radius ? currentSceneBounds.radius : 1;
       var clippingSpec = state.clipping || {
@@ -3610,24 +3595,8 @@ HTMLWidgets.widget({
         y: clippingCenter.y + clippingRadius * 0.5,
         z: clippingCenter.z + clippingRadius
       };
-      var selectedMeshId = selected && selected.kind === "mesh" ? selected.id : null;
-      var shouldFollowSelectedMaterial = selectedMeshId && (
-        state.clippingSelectionMode !== "manual" ||
-        state.lastClippingSelectedId !== selectedMeshId
-      );
-      if (shouldFollowSelectedMaterial && activeMaterialName && runtimeMaterials.indexOf(activeMaterialName) !== -1) {
-        clippingSpec.material = activeMaterialName;
-        if (state.clipping) {
-          state.clipping.material = activeMaterialName;
-        }
-        state.clippingSelectionMode = "auto";
-        state.lastClippingSelectedId = selectedMeshId;
-      } else if (clippingSpec.material && runtimeMaterials.indexOf(clippingSpec.material) === -1 && runtimeMaterials.length) {
-        clippingSpec.material = runtimeMaterials[0];
-      }
       state.ui.clippingEnabledInput.checked = clippingSpec.enabled === true;
-      state.ui.clippingMaterialSelect.value = clippingSpec.material || (runtimeMaterials[0] || "");
-      state.ui.clippingMaterialSelect.disabled = !runtimeMaterials.length;
+      state.ui.clippingMaterialSelect.disabled = true;
       state.ui.clippingXSlider.min = String(clippingCenter.x - clippingRadius);
       state.ui.clippingXSlider.max = String(clippingCenter.x + clippingRadius);
       state.ui.clippingYSlider.min = String(clippingCenter.y - clippingRadius);
