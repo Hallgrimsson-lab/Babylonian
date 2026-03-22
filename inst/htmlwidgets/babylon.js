@@ -539,20 +539,64 @@ HTMLWidgets.widget({
     }
 
     function applyMorphTarget(mesh, primitive) {
-      var spec = primitive.morph_target || primitive.morphTarget;
-      if (!spec || !Array.isArray(spec.vertices) || !spec.vertices.length) {
+      var specs = primitive.morph_target || primitive.morphTarget;
+      if (!specs) {
+        return;
+      }
+      if (!Array.isArray(specs)) {
+        specs = [specs];
+      }
+      specs = specs.filter(function(spec) {
+        return spec && Array.isArray(spec.vertices) && spec.vertices.length;
+      });
+      if (!specs.length) {
         return;
       }
 
       var manager = new BABYLON.MorphTargetManager();
-      var target = new BABYLON.MorphTarget(
-        spec.name || (mesh.name + "-morph"),
-        spec.influence === undefined ? 0 : Number(spec.influence),
-        scene
-      );
-      target.setPositions(spec.vertices);
-      manager.addTarget(target);
+      specs.forEach(function(spec, index) {
+        var target = new BABYLON.MorphTarget(
+          spec.name || (mesh.name + "-morph-" + index),
+          spec.influence === undefined ? 0 : Number(spec.influence),
+          scene
+        );
+        target.setPositions(spec.vertices);
+        manager.addTarget(target);
+      });
       mesh.morphTargetManager = manager;
+    }
+
+    function normalizeMorphTargetSpecs(primitive) {
+      var specs = primitive && (primitive.morph_target || primitive.morphTarget);
+      if (!specs) {
+        return [];
+      }
+      return Array.isArray(specs) ? specs : [specs];
+    }
+
+    function setMorphTargetInfluence(mesh, primitive, index, influence) {
+      var value = Number(influence);
+      if (!isFinite(value)) {
+        return;
+      }
+
+      var specs = normalizeMorphTargetSpecs(primitive);
+      if (specs[index]) {
+        specs[index].influence = value;
+      }
+      if (primitive && primitive.morph_target) {
+        primitive.morph_target = specs;
+      }
+      if (primitive && primitive.morphTarget) {
+        primitive.morphTarget = specs;
+      }
+
+      if (mesh && mesh.morphTargetManager && typeof mesh.morphTargetManager.getTarget === "function") {
+        var target = mesh.morphTargetManager.getTarget(index);
+        if (target) {
+          target.influence = value;
+        }
+      }
     }
 
     function legacyMaterialSpec(primitive) {
@@ -2823,6 +2867,14 @@ HTMLWidgets.widget({
           if (target.primitive && target.primitive.material) {
             entry.material = cloneMaterialSpec(target.primitive.material);
           }
+          if (target.primitive && target.primitive.morph_target) {
+            entry.morph_target = normalizeMorphTargetSpecs(target.primitive).map(function(spec) {
+              return {
+                name: spec.name || null,
+                influence: Number(spec.influence === undefined ? 0 : spec.influence)
+              };
+            });
+          }
           if (target.createdInEditor) {
             entry.created_in_editor = true;
           }
@@ -2918,6 +2970,10 @@ HTMLWidgets.widget({
               "</div>" +
             "</div>" +
           "</details>" +
+          "<details data-role='section-morphs' style='margin-bottom:8px;'>" +
+            "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Morph Targets</summary>" +
+            "<div data-role='morphs-panel' style='margin-top:8px; margin-left:10px; color:#334155;'></div>" +
+          "</details>" +
           "<details data-role='section-materials' style='margin-bottom:8px;'>" +
             "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Materials</summary>" +
             "<div style='margin-top:8px; margin-left:10px;'>" +
@@ -3002,6 +3058,8 @@ HTMLWidgets.widget({
           meshSection: uiLayer.querySelector("[data-role='section-meshes']"),
           materialSection: uiLayer.querySelector("[data-role='section-materials']"),
           lightSection: uiLayer.querySelector("[data-role='section-lights']"),
+          morphsSection: uiLayer.querySelector("[data-role='section-morphs']"),
+          morphsPanel: uiLayer.querySelector("[data-role='morphs-panel']"),
           effectsSection: uiLayer.querySelector("[data-role='section-effects']"),
           clippingSection: uiLayer.querySelector("[data-role='section-clipping']"),
           snapshotSection: uiLayer.querySelector("[data-role='section-snapshot']"),
@@ -3399,7 +3457,7 @@ HTMLWidgets.widget({
         state.ui.clippingYSlider.addEventListener("input", updateClippingFromInputs);
         state.ui.clippingZSlider.addEventListener("input", updateClippingFromInputs);
 
-        [state.ui.meshSection, state.ui.materialSection, state.ui.lightSection, state.ui.effectsSection, state.ui.clippingSection, state.ui.snapshotSection, state.ui.logSection].forEach(function(section) {
+        [state.ui.meshSection, state.ui.materialSection, state.ui.lightSection, state.ui.morphsSection, state.ui.effectsSection, state.ui.clippingSection, state.ui.snapshotSection, state.ui.logSection].forEach(function(section) {
           if (!section) {
             return;
           }
@@ -3407,6 +3465,7 @@ HTMLWidgets.widget({
             state.sectionOpen.meshes = !!state.ui.meshSection.open;
             state.sectionOpen.materials = !!state.ui.materialSection.open;
             state.sectionOpen.lights = !!state.ui.lightSection.open;
+            state.sectionOpen.morphs = !!state.ui.morphsSection.open;
             state.sectionOpen.effects = !!state.ui.effectsSection.open;
             state.sectionOpen.clipping = !!state.ui.clippingSection.open;
             state.sectionOpen.snapshot = !!state.ui.snapshotSection.open;
@@ -3427,6 +3486,7 @@ HTMLWidgets.widget({
       state.ui.meshSection.open = state.sectionOpen.meshes !== false;
       state.ui.materialSection.open = state.sectionOpen.materials !== false;
       state.ui.lightSection.open = state.sectionOpen.lights !== false;
+      state.ui.morphsSection.open = state.sectionOpen.morphs !== false;
       state.ui.effectsSection.open = state.sectionOpen.effects !== false;
       state.ui.clippingSection.open = state.sectionOpen.clipping === true;
       state.ui.snapshotSection.open = state.sectionOpen.snapshot === true;
@@ -3570,6 +3630,64 @@ HTMLWidgets.widget({
         }
       } else {
         state.ui.materialPbrFields.style.display = "none";
+      }
+
+      var morphTargets = [];
+      meshTargets.forEach(function(target) {
+        normalizeMorphTargetSpecs(target.primitive).forEach(function(spec, index) {
+          morphTargets.push({
+            target: target,
+            spec: spec,
+            index: index
+          });
+        });
+      });
+      state.ui.morphsSection.style.display = morphTargets.length ? "block" : "none";
+      state.ui.morphsPanel.innerHTML = "";
+      if (morphTargets.length) {
+        morphTargets.forEach(function(item) {
+          var wrapper = document.createElement("div");
+          wrapper.style.marginBottom = "10px";
+
+          var label = document.createElement("label");
+          label.style.display = "block";
+          label.style.marginBottom = "4px";
+          label.style.color = "#334155";
+          var influence = Number(item.spec.influence === undefined ? 0 : item.spec.influence);
+          if (!isFinite(influence)) {
+            influence = 0;
+          }
+          var morphLabel = item.spec.name || ((item.target.name || item.target.label || "Morph target") + " " + (item.index + 1));
+          label.textContent = morphLabel + " influence " + influence.toFixed(2).replace(/\.?0+$/, "");
+
+          var slider = document.createElement("input");
+          slider.type = "range";
+          slider.min = "0";
+          slider.max = "1";
+          slider.step = "0.01";
+          slider.value = String(influence);
+          slider.style.width = "100%";
+          function updateMorphSlider(evt, publish) {
+            var nextValue = Number(evt.target.value);
+            setMorphTargetInfluence(item.target.node, item.target.primitive, item.index, nextValue);
+            label.textContent = morphLabel + " influence " + nextValue.toFixed(2).replace(/\.?0+$/, "");
+            if (publish) {
+              publishSceneEditorState(state);
+            }
+          }
+          slider.addEventListener("input", function(evt) {
+            updateMorphSlider(evt, false);
+          });
+          slider.addEventListener("change", function(evt) {
+            updateMorphSlider(evt, true);
+          });
+
+          wrapper.appendChild(label);
+          wrapper.appendChild(slider);
+          state.ui.morphsPanel.appendChild(wrapper);
+        });
+      } else {
+        state.ui.morphsPanel.textContent = "No morph targets detected.";
       }
 
       var gizmoLabel = state.gizmosVisible === false ? "Show Gizmo" : "Hide Gizmo";

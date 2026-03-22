@@ -679,8 +679,75 @@ testthat::test_that("morph_target3d stores same-topology morph targets", {
 
   testthat::expect_s3_class(mesh, "babylon_mesh")
   testthat::expect_true(is.list(mesh$morph_target))
-  testthat::expect_equal(mesh$morph_target$influence, 0.3)
-  testthat::expect_equal(length(mesh$morph_target$vertices), 9L)
+  testthat::expect_length(mesh$morph_target, 1L)
+  testthat::expect_equal(mesh$morph_target[[1]]$influence, 0.3)
+  testthat::expect_equal(length(mesh$morph_target[[1]]$vertices), 9L)
+})
+
+testthat::test_that("morph_target3d appends multiple morph targets", {
+  reference <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0),
+      c(0, 1, 0)
+    )
+  )
+  target_a <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0.5),
+      c(0, 1, 0.25)
+    )
+  )
+  target_b <- make_test_mesh3d(
+    rbind(
+      c(0.1, 0, 0),
+      c(1, 0.2, 0),
+      c(0, 1, 0.4)
+    )
+  )
+
+  mesh <- morph_target3d(reference, target_a, influence = 0.3, name = "a", color = "gray70")
+  mesh <- morph_target3d(mesh, target_b, influence = 0.6, name = "b")
+
+  testthat::expect_length(mesh$morph_target, 2L)
+  testthat::expect_equal(mesh$morph_target[[1]]$name, "a")
+  testthat::expect_equal(mesh$morph_target[[2]]$name, "b")
+  testthat::expect_equal(mesh$morph_target[[2]]$influence, 0.6)
+})
+
+testthat::test_that("apply_scene_state can update morph target influence", {
+  reference <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0),
+      c(0, 1, 0)
+    )
+  )
+  target <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0.5),
+      c(0, 1, 0.25)
+    )
+  )
+
+  widget <- babylon(data = list(morph_target3d(reference, target, influence = 0.1, color = "gray70")))
+  updated <- apply_scene_state(
+    widget,
+    state = list(
+      objects = list(
+        list(
+          index = 1L,
+          primitive_type = "mesh3d",
+          node_type = "mesh",
+          morph_target = list(list(influence = 0.8))
+        )
+      )
+    )
+  )
+
+  testthat::expect_equal(updated$x$objects[[1]]$morph_target[[1]]$influence, 0.8)
 })
 
 testthat::test_that("morph_target3d validates mesh topology", {
@@ -790,7 +857,7 @@ testthat::test_that("render_frames3d applies view and morph frames with a custom
     calls[[length(calls) + 1L]] <<- list(
       filename = filename,
       view = widget$x$scene$view,
-      influence = widget$x$objects[[1]]$morph_target$influence
+      influence = widget$x$objects[[1]]$morph_target[[1]]$influence
     )
     writeLines("", filename)
     filename

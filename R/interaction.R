@@ -363,10 +363,16 @@ prepare_digitize_landmark_mesh <- function(mesh, fixed = NULL, center = TRUE) {
   center_point <- colMeans(vertices)
   mesh$vertices <- flatten_vertex_matrix(sweep(vertices, 2L, center_point, "-"))
 
-  if (!is.null(mesh$morph_target) && !is.null(mesh$morph_target$vertices)) {
-    morph_vertices <- t(matrix(mesh$morph_target$vertices, nrow = 3L))
-    morph_vertices <- sweep(validate_xyz_matrix(morph_vertices), 2L, center_point, "-")
-    mesh$morph_target$vertices <- flatten_vertex_matrix(morph_vertices)
+  if (!is.null(mesh$morph_target)) {
+    mesh$morph_target <- lapply(mesh$morph_target, function(target) {
+      if (is.null(target$vertices)) {
+        return(target)
+      }
+      morph_vertices <- t(matrix(target$vertices, nrow = 3L))
+      morph_vertices <- sweep(validate_xyz_matrix(morph_vertices), 2L, center_point, "-")
+      target$vertices <- flatten_vertex_matrix(morph_vertices)
+      target
+    })
   }
 
   if (!is.null(fixed)) {
@@ -476,6 +482,14 @@ seed_scene_state_entry <- function(object, index) {
     entry$scaling <- normalize_transform_vector(object$scaling %||% c(1, 1, 1), "scaling")
     if (!is.null(object$material)) {
       entry$material <- normalize_material3d(object$material)
+    }
+    if (!is.null(object$morph_target)) {
+      entry$morph_target <- lapply(object$morph_target, function(target) {
+        list(
+          name = target$name %||% NULL,
+          influence = normalize_morph_influence(target$influence %||% 0)
+        )
+      })
     }
     return(entry)
   }
@@ -612,6 +626,25 @@ normalize_scene_state_entry <- function(x) {
     entry$material <- normalize_material3d(x$material)
   }
 
+  if (!is.null(x$morph_target)) {
+    morph_target <- x$morph_target
+    if (!is.list(morph_target)) {
+      stop("`morph_target` scene-state entries must be lists.", call. = FALSE)
+    }
+    if (!is.null(morph_target$influence) || !is.null(morph_target$name)) {
+      morph_target <- list(morph_target)
+    }
+    entry$morph_target <- lapply(morph_target, function(target) {
+      if (!is.list(target)) {
+        stop("Each `morph_target` scene-state entry must be a list.", call. = FALSE)
+      }
+      list(
+        name = target$name %||% NULL,
+        influence = normalize_morph_influence(target$influence %||% 0)
+      )
+    })
+  }
+
   if (!is.null(x$light_type)) {
     entry$light_type <- as.character(x$light_type[[1]])
   }
@@ -742,6 +775,15 @@ apply_scene_state_entry <- function(object, entry) {
 
   if (!is.null(entry$material)) {
     object$material <- normalize_material3d(entry$material)
+  }
+
+  if (!is.null(entry$morph_target) && !is.null(object$morph_target)) {
+    for (i in seq_len(min(length(entry$morph_target), length(object$morph_target)))) {
+      object$morph_target[[i]]$influence <- normalize_morph_influence(entry$morph_target[[i]]$influence %||% 0)
+      if (!is.null(entry$morph_target[[i]]$name)) {
+        object$morph_target[[i]]$name <- entry$morph_target[[i]]$name
+      }
+    }
   }
 
   object

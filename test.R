@@ -312,8 +312,7 @@ babylon(
 )
 
 
-# clip away submeshes/ parts of the scene
-# gizmo undo/reset to original state
+# clip away submeshes/ parts of the scene - UX bad
 # paint vertices index w/ symmetry support
 
 #done
@@ -332,6 +331,8 @@ babylon(
 # tif support
 # svg support
 # lighting portrait presets
+# gizmo undo/reset to original state
+
 
 testscene <- babylon(
   data = list(
@@ -374,3 +375,23 @@ state <- edit_scene3d(testscene)
 bbs <- Morpho::file2mesh("bbs.ply")
 
 digit.fixed(mesh, 5, index = T)
+
+repro1 <- file2mesh("~/Documents/PhenomicsLabs/phase2_outputs/optimizer_testing_diagnostic/mesh_exports/reconstructedFullTopo.obj")
+repro2 <- file2mesh("~/Documents/PhenomicsLabs/testImages/optimizerTesting/151111141448.obj")
+
+Babylonian::meshDist(repro2, repro1, alpha = 0, displace = T)
+
+## more tests
+repro3 <- file2mesh("~/Documents/PhenomicsLabs/backups/alignedRegisteredMeshes/0b93ade6-e164-4d33-9769-de6d772c87a4.obj")
+repro4 <- file2mesh("~/Documents/PhenomicsLabs/backups/alignedRawMeshes/0b93ade6-e164-4d33-9769-de6d772c87a4.obj")
+
+testscene <- babylon(
+  data = list(
+    as_babylon_mesh(repro1, color = "gray75"),
+    as_babylon_mesh(repro2, color = "yellow"),
+    as_babylon_mesh(repro3, color = "red"),
+    as_babylon_mesh(repro4, color = "blue")
+  )
+)
+
+edit_scene3d(testscene)

@@ -451,8 +451,9 @@ heatmap_animation_frame_widget <- function(widget, view = NULL, morph = NULL, mo
   )
   heatmap_object <- resolve_heatmap_animation_object(frame_widget$x$objects %||% list(), target = morph_target)
   reference_mesh <- strip_animation_morph_target(heatmap_object)
-  influence <- if (is.null(morph)) heatmap_object$morph_target$influence else normalize_morph_influence(morph)
-  comparison_mesh <- evaluate_animation_morph_target(reference_mesh, heatmap_object$morph_target, influence = influence)
+  active_morph_target <- select_animation_morph_target(heatmap_object$morph_target)
+  influence <- if (is.null(morph)) active_morph_target$influence else normalize_morph_influence(morph)
+  comparison_mesh <- evaluate_animation_morph_target(reference_mesh, active_morph_target, influence = influence)
 
   scene_args <- utils::modifyList(
     list(
@@ -489,7 +490,10 @@ apply_morph_influence_to_objects <- function(objects, influence, target = NULL) 
       return(object)
     }
 
-    object$morph_target$influence <- influence
+    object$morph_target <- lapply(object$morph_target, function(spec) {
+      spec$influence <- influence
+      spec
+    })
     matched <<- TRUE
     object
   })
@@ -582,6 +586,19 @@ evaluate_animation_morph_target <- function(reference_mesh, morph_target, influe
   }
   comparison_mesh$morph_target <- NULL
   comparison_mesh
+}
+
+select_animation_morph_target <- function(morph_target) {
+  if (is.null(morph_target)) {
+    stop("No morph target is available for animation.", call. = FALSE)
+  }
+  if (is.list(morph_target) && !is.null(morph_target$vertices)) {
+    return(morph_target)
+  }
+  if (is.list(morph_target) && length(morph_target)) {
+    return(morph_target[[1L]])
+  }
+  stop("`morph_target` must contain at least one morph target specification.", call. = FALSE)
 }
 
 resolve_animation_output_type <- function(file, type = NULL) {

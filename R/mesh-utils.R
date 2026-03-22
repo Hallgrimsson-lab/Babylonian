@@ -305,11 +305,12 @@ as_babylon_mesh <- function(
 #' @param x A `mesh3d` or `babylon_mesh` object used as the base mesh.
 #' @param target A `mesh3d` or `babylon_mesh` object with matching topology.
 #' @param influence Initial morph-target influence.
+#' @param name What to name the morphtarget.
 #' @param ... Additional graphical parameters forwarded to [as_babylon_mesh()]
 #'   or applied to an existing `babylon_mesh`.
 #'
 #' @export
-morph_target3d <- function(x, target, influence = 0, ...) {
+morph_target3d <- function(x, target, influence = 0, name = NULL, ...) {
   if (inherits(x, "mesh3d")) {
     mesh <- do.call(as_babylon_mesh, c(list(x = x), list(...)))
   } else if (inherits(x, "babylon_mesh")) {
@@ -323,15 +324,21 @@ morph_target3d <- function(x, target, influence = 0, ...) {
   target_mesh <- normalize_morph_target_mesh(target, arg = "target")
   validate_matching_mesh_topology(mesh, target_mesh, "x", "target")
 
-  mesh$morph_target <- normalize_morph_target_spec(
+  next_target <- normalize_morph_target_spec(
     list(
-      name = paste0(mesh$name %||% "mesh", "-morph"),
+      name = if(is.null(name)){paste0(mesh$name %||% "mesh", "-morph")} else{name},
       vertices = target_mesh$vertices,
       influence = influence
     ),
     base_vertices = mesh$vertices,
     base_indices = mesh$indices
   )
+  existing_targets <- normalize_morph_target_spec(
+    mesh$morph_target %||% list(),
+    base_vertices = mesh$vertices,
+    base_indices = mesh$indices
+  )
+  mesh$morph_target <- c(existing_targets, next_target)
 
   structure(mesh, class = c("babylon_mesh", "list"))
 }
@@ -1064,7 +1071,25 @@ normalize_morph_target_spec <- function(x, base_vertices, base_indices) {
   }
 
   if (!is.list(x)) {
-    stop("`morph_target` must be a list.", call. = FALSE)
+    stop("`morph_target` must be a list of morph target specifications.", call. = FALSE)
+  }
+
+  if (!is_morph_target_entry(x)) {
+    targets <- lapply(x, normalize_single_morph_target_spec, base_vertices = base_vertices, base_indices = base_indices)
+    targets <- Filter(Negate(is.null), targets)
+    return(unname(targets))
+  }
+
+  list(normalize_single_morph_target_spec(x, base_vertices = base_vertices, base_indices = base_indices))
+}
+
+is_morph_target_entry <- function(x) {
+  is.list(x) && any(c("vertices", "positions", "influence", "name") %in% names(x))
+}
+
+normalize_single_morph_target_spec <- function(x, base_vertices, base_indices) {
+  if (is.null(x)) {
+    return(NULL)
   }
 
   vertices <- x$vertices %||% x$positions %||% NULL
