@@ -124,6 +124,69 @@ digit.fixed <- function(
   )
 }
 
+#' Interactively paint-select vertices on a mesh
+#'
+#' This opens a Babylonian painting gadget that lets you brush directly on a
+#' mesh surface to collect vertex indices. Painting can be toggled from the UI
+#' or with the `p` key, and the selection can be mirrored across local `x`,
+#' `y`, and `z` axes before finishing.
+#'
+#' @param x A `babylon_mesh` or `mesh3d` object.
+#' @param center Whether to center the mesh coordinates before painting.
+#' @param width Widget width.
+#' @param height Widget height.
+#' @param elementId Optional widget element id.
+#' @param color Selection marker color.
+#' @param marker_scale Selection marker diameter as a fraction of mesh radius.
+#'
+#' @export
+paint_vertices3d <- function(
+  x,
+  center = TRUE,
+  width = NULL,
+  height = NULL,
+  elementId = NULL,
+  color = "#dc2626",
+  marker_scale = 0.012
+) {
+  mesh <- normalize_scene_object(x)
+
+  if (!inherits(mesh, "babylon_mesh")) {
+    stop("`x` must be a `babylon_mesh` or `mesh3d` object.", call. = FALSE)
+  }
+
+  prepared <- prepare_digitize_landmark_mesh(
+    mesh,
+    fixed = NULL,
+    center = center
+  )
+  mesh <- prepared$mesh
+
+  interaction <- list(
+    mode = "paint_vertices",
+    center = isTRUE(center),
+    marker = list(
+      color = normalize_babylon_color(color),
+      scale = normalize_digitize_marker_scale(marker_scale, 1)
+    )
+  )
+
+  widget <- babylon(
+    data = list(mesh),
+    interaction = interaction,
+    width = width,
+    height = height,
+    elementId = elementId
+  )
+  widget$x$scene$view <- NULL
+
+  if (!interactive()) {
+    return(widget)
+  }
+
+  run_vertex_paint_gadget(widget)
+}
+
 #' Interactively pose a 3D scene and return its view parameters
 #'
 #' This opens a Shiny gadget with a Babylonian scene, lets you rotate and zoom
@@ -978,6 +1041,67 @@ run_landmark_gadget <- function(widget, n = NULL, index = FALSE) {
   }
 
   result
+}
+
+run_vertex_paint_gadget <- function(widget) {
+  if (!requireNamespace("shiny", quietly = TRUE)) {
+    warning("Package 'shiny' is required for interactive vertex painting; returning the widget instead.")
+    return(widget)
+  }
+
+  if (!requireNamespace("miniUI", quietly = TRUE)) {
+    warning("Package 'miniUI' is required for interactive vertex painting; returning the widget instead.")
+    return(widget)
+  }
+
+  if (is.null(widget$elementId) || identical(widget$elementId, "")) {
+    widget$elementId <- paste0("babylon_vertex_paint_", as.integer(stats::runif(1, 1, 1e9)))
+  }
+
+  ui <- miniUI::miniPage(
+    miniUI::gadgetTitleBar("Paint Vertices"),
+    miniUI::miniContentPanel(widget)
+  )
+
+  server <- function(input, output, session) {
+    selection_input <- paste0(widget$elementId, "_vertex_selection")
+    par3d_input <- paste0(widget$elementId, "_par3d")
+
+    shiny::observeEvent(input[[par3d_input]], {
+      value <- input[[par3d_input]]
+      if (!is.null(value) && nzchar(value)) {
+        set_last_live_par3d(jsonlite::fromJSON(value, simplifyVector = TRUE))
+      }
+    }, ignoreNULL = TRUE)
+
+    shiny::observeEvent(input$done, {
+      value <- input[[selection_input]]
+      if (is.null(value) || !nzchar(value)) {
+        shiny::stopApp(integer(0))
+      }
+      parsed <- jsonlite::fromJSON(value, simplifyVector = TRUE)
+      indices <- sort(unique(as.integer(parsed$indices %||% integer(0))))
+      indices <- indices[is.finite(indices) & indices > 0L]
+      shiny::stopApp(indices)
+    })
+
+    shiny::observeEvent(input$cancel, {
+      shiny::stopApp(NULL)
+    })
+  }
+
+  viewer <- shiny::dialogViewer(
+    "Paint Vertices",
+    width = normalize_viewer_dimension(widget$width, default = 1000),
+    height = normalize_viewer_dimension(widget$height, default = 760)
+  )
+  result <- shiny::runGadget(ui, server, viewer = viewer)
+
+  if (is.null(result)) {
+    return(invisible(NULL))
+  }
+
+  sort(unique(as.integer(result)))
 }
 
 run_pose_gadget <- function(widget) {

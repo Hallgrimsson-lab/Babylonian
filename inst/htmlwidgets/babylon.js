@@ -610,7 +610,7 @@ HTMLWidgets.widget({
         specular: primitive.specularity,
         alpha: primitive.alpha,
         wireframe: primitive.wireframe,
-        backface_culling: true
+        backface_culling: false
       };
 
       if (primitive.vertex_colors) {
@@ -1209,6 +1209,22 @@ HTMLWidgets.widget({
       marker.material = material;
 
       return marker;
+    }
+
+    function createPointOverlay(name, color, size) {
+      var mesh = registerNode(new BABYLON.Mesh(name, scene));
+      mesh.isPickable = false;
+      mesh.alwaysSelectAsActiveMesh = true;
+
+      var material = registerMaterial(new BABYLON.StandardMaterial(name + "-material", scene));
+      material.pointsCloud = true;
+      material.pointSize = size;
+      material.diffuseColor = coerceColor3(color, BABYLON.Color3.FromHexString("#dc2626"));
+      material.emissiveColor = material.diffuseColor.scale(0.35);
+      material.disableLighting = true;
+      material.backFaceCulling = false;
+      mesh.material = material;
+      return mesh;
     }
 
     function createLightHelper(node, primitive, name) {
@@ -2489,6 +2505,69 @@ HTMLWidgets.widget({
       }
     }
 
+    function editorTargetNodes(target) {
+        if (!target) return [];
+    
+      if (target.importedMeshes && target.importedMeshes.length) {
+        return target.importedMeshes.filter(Boolean);
+      }
+    
+      return target.node ? [target.node] : [];
+    } 
+
+    function computeNodesBounds(nodes) {
+      if (!nodes || !nodes.length) return null;
+    
+      var min = new BABYLON.Vector3(Infinity, Infinity, Infinity);
+      var max = new BABYLON.Vector3(-Infinity, -Infinity, -Infinity);
+      var found = false;
+    
+      nodes.forEach(function (node) {
+        if (!node || !node.getBoundingInfo) return;
+    
+        node.computeWorldMatrix(true);
+        var box = node.getBoundingInfo().boundingBox;
+        if (!box) return;
+    
+        min = BABYLON.Vector3.Minimize(min, box.minimumWorld);
+        max = BABYLON.Vector3.Maximize(max, box.maximumWorld);
+        found = true;
+      });
+    
+      if (!found) return null;
+    
+      var center = min.add(max).scale(0.5);
+      var extent = max.subtract(min);
+      var radius = extent.length() / 2;
+    
+      if (!isFinite(radius) || radius <= 0) radius = 1;
+    
+      return { min: min, max: max, center: center, radius: radius };
+    }
+    
+    function editorTargetBounds(target) {
+      if (!target) return null;
+              
+      if (target.kind === "mesh") {
+        return computeNodesBounds(editorTargetNodes(target));
+      }
+    
+      if (target.kind === "light" && target.node && target.node.position) {
+        return {
+          center: target.node.position.clone(),
+          radius: currentSceneBounds && currentSceneBounds.radius
+            ? currentSceneBounds.radius * 0.08
+            : 1
+        };
+      }
+    
+      return null;
+    } 
+
+    function clamp(value, min, max) {
+      return Math.min(Math.max(value, min), max);
+    }
+
     function syncEditorGizmoState(state) {
       if (!state || !state.gizmoManager) {
         return;
@@ -2516,8 +2595,35 @@ HTMLWidgets.widget({
       state.gizmoManager.scaleGizmoEnabled = visible && state.gizmoMode === "scale" && canScale;
 
       var gizmoScaleRatio = null;
-      if (camera && isFinite(camera.radius) && camera.radius > 0) {
+      var targetBounds = editorTargetBounds(target);
+      var sceneRadius = currentSceneBounds && currentSceneBounds.radius
+        ? currentSceneBounds.radius
+        : 1;
+      
+      if (targetBounds && camera) {
+        var distance = BABYLON.Vector3.Distance(
+          camera.position,
+          targetBounds.center
+        );
+      
+        // size relative to object
+        var sizeFromTarget = targetBounds.radius * 0.01;
+      
+        // adjust for zoom distance
+        var sizeFromDistance = distance * 0.08;
+      
+        gizmoScaleRatio = Math.min(sizeFromTarget, sizeFromDistance);
+      
+        // clamp globally
+        gizmoScaleRatio = clamp(
+          gizmoScaleRatio,
+          sceneRadius * 0.003,
+          sceneRadius * 0.12
+        );
+      
+      } else if (camera && isFinite(camera.radius) && camera.radius > 0) {
         gizmoScaleRatio = Math.max(camera.radius * 0.006, 0.004);
+      
       } else if (currentSceneBounds && currentSceneBounds.radius) {
         gizmoScaleRatio = Math.max(currentSceneBounds.radius * 0.006, 0.004);
       }
@@ -2963,11 +3069,14 @@ HTMLWidgets.widget({
               "<input data-role='intensity-slider' type='range' min='0' max='5' step='0.01' value='1' style='width:100%; margin-bottom:8px;' />" +
               "<label data-role='diffuse-label' style='display:block; margin-bottom:4px; color:#334155;'>Diffuse color</label>" +
               "<input data-role='diffuse-color' type='color' value='#ffffff' style='width:100%; height:36px; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; padding:2px;' />" +
-              "<div data-role='shadow-fields' style='margin-bottom:8px;'>" +
-                "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='shadow-enabled' type='checkbox' /> Shadows</label>" +
-                "<label data-role='shadow-darkness-label' style='display:block; margin-bottom:4px; color:#334155;'>Shadow darkness <span data-role='shadow-darkness-value'>0.5</span></label>" +
-                "<input data-role='shadow-darkness-slider' type='range' min='0' max='1' step='0.01' value='0.5' style='width:100%; margin-bottom:8px;' />" +
-              "</div>" +
+              "<details data-role='shadow-fields' style='margin-bottom:8px;'>" +
+                "<summary style='cursor:pointer; font-weight:700; color:#334155; text-decoration:underline;'>Shadows</summary>" +
+                "<div style='margin-top:8px; margin-left:10px;'>" +
+                  "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='shadow-enabled' type='checkbox' /> Enable shadows</label>" +
+                  "<label data-role='shadow-darkness-label' style='display:block; margin-bottom:4px; color:#334155;'>Shadow darkness <span data-role='shadow-darkness-value'>0.5</span></label>" +
+                  "<input data-role='shadow-darkness-slider' type='range' min='0' max='1' step='0.01' value='0.5' style='width:100%; margin-bottom:8px;' />" +
+                "</div>" +
+              "</details>" +
             "</div>" +
           "</details>" +
           "<details data-role='section-morphs' style='margin-bottom:8px;'>" +
@@ -3589,6 +3698,7 @@ HTMLWidgets.widget({
           shadowDarkness = 0.5;
         }
         state.ui.shadowFields.style.display = shadowSupported ? "block" : "none";
+        state.ui.shadowFields.open = shadowSupported && shadowEnabled;
         state.ui.shadowEnabledInput.checked = shadowEnabled;
         state.ui.shadowEnabledInput.disabled = !shadowSupported;
         state.ui.shadowDarknessSlider.value = String(shadowDarkness);
@@ -3854,6 +3964,283 @@ HTMLWidgets.widget({
       );
     }
 
+    function publishVertexSelection(state) {
+      if (!state) {
+        return;
+      }
+
+      syncVertexPaintCameraControls(state);
+      updateVertexPaintPanel(state);
+      emitHostEvent(
+        "vertex_selection",
+        JSON.stringify({indices: state.selectedIndices.slice()}),
+        state.widgetId
+      );
+    }
+
+    function syncVertexPaintCameraControls(state) {
+      if (!state || state.mode !== "paint_vertices" || !camera || !camera.inputs || !camera.inputs.attached) {
+        return;
+      }
+      var pointers = camera.inputs.attached.pointers;
+      if (!pointers || typeof pointers.attachControl !== "function" || typeof pointers.detachControl !== "function") {
+        return;
+      }
+
+      if (state.paintingEnabled) {
+        if (!state.pointerControlsDetached) {
+          pointers.detachControl(canvas);
+          state.pointerControlsDetached = true;
+        }
+      } else if (state.pointerControlsDetached) {
+        pointers.attachControl(canvas);
+        state.pointerControlsDetached = false;
+      }
+    }
+
+    function updateVertexPaintPanel(state) {
+      if (!state || state.mode !== "paint_vertices") {
+        clearUiPanel();
+        return;
+      }
+
+      uiLayer.style.display = "block";
+      uiLayer.innerHTML =
+        "<div data-role='panel-handle' style='font-weight:700; margin:-10px -10px 8px -10px; padding:10px; border-bottom:1px solid rgba(15,23,42,0.08); cursor:move; user-select:none; background:rgba(248,250,252,0.9); border-top-left-radius:8px; border-top-right-radius:8px;'>Vertex Paint</div>" +
+        "<div style='padding-left:10px;'>" +
+          "<div style='display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;'>" +
+            "<div style='display:inline-block; padding:3px 8px; border-radius:999px; background:" + (state.paintingEnabled ? "rgba(15,118,110,0.15)" : "rgba(71,85,105,0.14)") + "; color:" + (state.paintingEnabled ? "#0f766e" : "#475569") + "; font-weight:700;'>" + (state.paintingEnabled ? "Painting Active" : "Camera Active") + "</div>" +
+            "<div style='color:#334155;'><strong>Selected:</strong> " + state.selectedIndices.length + "</div>" +
+            "<div style='display:flex; align-items:center; gap:6px; color:#334155;'><strong>Radius:</strong> <span data-role='brush-radius-legend-value'>" + formatRNumber(state.brushRadius) + "</span><span data-role='brush-radius-legend' style='display:inline-block; width:" + Math.max(10, Math.min(28, 10 + ((state.brushRadius - state.brushRadiusMin) / Math.max(state.brushRadiusMax - state.brushRadiusMin, 1e-8)) * 18)) + "px; height:" + Math.max(10, Math.min(28, 10 + ((state.brushRadius - state.brushRadiusMin) / Math.max(state.brushRadiusMax - state.brushRadiusMin, 1e-8)) * 18)) + "px; border:2px solid rgba(15,118,110,0.85); border-radius:999px; box-sizing:border-box; background:rgba(15,118,110,0.06);'></span></div>" +
+          "</div>" +
+          "<div style='margin-bottom:8px;'>" +
+            "<label style='display:block; margin-bottom:4px; color:#334155;'>Selection radius <span data-role='brush-radius-value' style='float:right; color:#64748b;'>" + formatRNumber(state.brushRadius) + "</span></label>" +
+            "<input type='range' min='" + formatRNumber(state.brushRadiusMin) + "' max='" + formatRNumber(state.brushRadiusMax) + "' step='" + formatRNumber(state.brushRadiusStep) + "' value='" + formatRNumber(state.brushRadius) + "' data-role='brush-radius' style='width:100%;'>" +
+          "</div>" +
+          "<div style='display:flex; gap:6px; margin-bottom:8px;'>" +
+            "<button type='button' data-role='paint-toggle' style='flex:1; border:0; border-radius:6px; background:" + (state.paintingEnabled ? "#0f766e" : "#475569") + "; color:white; padding:6px 10px; cursor:pointer;'>" + (state.paintingEnabled ? "Painting On" : "Painting Off") + "</button>" +
+            "<button type='button' data-role='undo-last' style='flex:1; border:0; border-radius:6px; background:#334155; color:white; padding:6px 10px; cursor:pointer;'>Undo Last</button>" +
+            "<button type='button' data-role='reset-selection' style='flex:1; border:0; border-radius:6px; background:#991b1b; color:white; padding:6px 10px; cursor:pointer;'>Reset</button>" +
+          "</div>" +
+          "<div style='margin-bottom:6px; color:#475569;'>Press <strong>p</strong> to toggle painting/camera control.</div>" +
+          "<div style='display:flex; gap:6px; margin-bottom:8px;'>" +
+            "<button type='button' data-role='mirror-x' style='flex:1; border:0; border-radius:6px; background:" + (state.symmetry && state.symmetry.x ? "#1d4ed8" : "#93c5fd") + "; color:white; opacity:" + (state.symmetry && state.symmetry.x ? "1" : "0.78") + "; padding:6px 10px; cursor:pointer;'>Sym X</button>" +
+            "<button type='button' data-role='mirror-y' style='flex:1; border:0; border-radius:6px; background:" + (state.symmetry && state.symmetry.y ? "#1d4ed8" : "#93c5fd") + "; color:white; opacity:" + (state.symmetry && state.symmetry.y ? "1" : "0.78") + "; padding:6px 10px; cursor:pointer;'>Sym Y</button>" +
+            "<button type='button' data-role='mirror-z' style='flex:1; border:0; border-radius:6px; background:" + (state.symmetry && state.symmetry.z ? "#1d4ed8" : "#93c5fd") + "; color:white; opacity:" + (state.symmetry && state.symmetry.z ? "1" : "0.78") + "; padding:6px 10px; cursor:pointer;'>Sym Z</button>" +
+          "</div>" +
+        "</div>";
+
+      enableUiPanelDrag(uiLayer.querySelector("[data-role='panel-handle']"));
+
+      uiLayer.querySelector("[data-role='paint-toggle']").addEventListener("click", function() {
+        state.paintingEnabled = !state.paintingEnabled;
+        publishVertexSelection(state);
+      });
+      var brushRadiusValue = uiLayer.querySelector("[data-role='brush-radius-value']");
+      var brushRadiusLegendValue = uiLayer.querySelector("[data-role='brush-radius-legend-value']");
+      var brushRadiusLegend = uiLayer.querySelector("[data-role='brush-radius-legend']");
+      uiLayer.querySelector("[data-role='brush-radius']").addEventListener("input", function(evt) {
+        state.brushRadius = Math.max(state.brushRadiusMin, Math.min(state.brushRadiusMax, Number(evt.target.value)));
+        var legendDiameter = Math.max(
+          10,
+          Math.min(
+            28,
+            10 + ((state.brushRadius - state.brushRadiusMin) / Math.max(state.brushRadiusMax - state.brushRadiusMin, 1e-8)) * 18
+          )
+        );
+        if (brushRadiusValue) {
+          brushRadiusValue.textContent = formatRNumber(state.brushRadius);
+        }
+        if (brushRadiusLegendValue) {
+          brushRadiusLegendValue.textContent = formatRNumber(state.brushRadius);
+        }
+        if (brushRadiusLegend) {
+          brushRadiusLegend.style.width = legendDiameter + "px";
+          brushRadiusLegend.style.height = legendDiameter + "px";
+        }
+      });
+      uiLayer.querySelector("[data-role='brush-radius']").addEventListener("change", function() {
+        publishVertexSelection(state);
+      });
+      uiLayer.querySelector("[data-role='undo-last']").addEventListener("click", function() {
+        undoVertexPaintStroke(state);
+      });
+      uiLayer.querySelector("[data-role='reset-selection']").addEventListener("click", function() {
+        resetVertexPaintSelection(state);
+      });
+      uiLayer.querySelector("[data-role='mirror-x']").addEventListener("click", function() {
+        toggleVertexPaintSymmetry(state, "x");
+      });
+      uiLayer.querySelector("[data-role='mirror-y']").addEventListener("click", function() {
+        toggleVertexPaintSymmetry(state, "y");
+      });
+      uiLayer.querySelector("[data-role='mirror-z']").addEventListener("click", function() {
+        toggleVertexPaintSymmetry(state, "z");
+      });
+    }
+
+    function rebuildVertexPaintMarkers(state) {
+      if (!state) {
+        return;
+      }
+      if (!state.overlayMesh) {
+        state.overlayMesh = createPointOverlay("painted-vertices-overlay", state.markerColor, state.markerSize * 0.85);
+      }
+      if (state.overlayMesh.material) {
+        state.overlayMesh.material.pointSize = state.markerSize * 0.85;
+      }
+      var positions = state.localPositions;
+      var overlayPositions = [];
+      state.selectedIndices.forEach(function(index) {
+        var offset = (index - 1) * 3;
+        if (offset < 0 || offset + 2 >= positions.length) {
+          return;
+        }
+        var localPoint = BABYLON.Vector3.FromArray(positions, offset);
+        var worldPoint = BABYLON.Vector3.TransformCoordinates(localPoint, state.mesh.getWorldMatrix());
+        overlayPositions.push(worldPoint.x, worldPoint.y, worldPoint.z);
+      });
+      state.overlayMesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, overlayPositions, true);
+      state.overlayMesh.setIndices([]);
+      state.overlayMesh.isVisible = overlayPositions.length > 0;
+    }
+
+    function addVertexPaintIndices(state, indices, commitStroke) {
+      if (!state || !indices || !indices.length) {
+        return;
+      }
+      var expandedIndices = indices.slice();
+      ["x", "y", "z"].forEach(function(axis) {
+        if (state.symmetry && state.symmetry[axis]) {
+          expandedIndices.slice().forEach(function(index) {
+            var mirroredIndex = nearestMirroredVertexIndex(state, index, axis);
+            if (mirroredIndex !== null) {
+              expandedIndices.push(mirroredIndex);
+            }
+          });
+        }
+      });
+      var added = [];
+      expandedIndices.forEach(function(index) {
+        index = Number(index);
+        if (!isFinite(index) || index < 1 || state.selectedIndexMap[index]) {
+          return;
+        }
+        state.selectedIndexMap[index] = true;
+        state.selectedIndices.push(index);
+        added.push(index);
+      });
+      if (!added.length) {
+        return;
+      }
+      if (commitStroke !== false) {
+        state.undoStack.push(added);
+      } else {
+        state.currentStroke = state.currentStroke || [];
+        added.forEach(function(index) {
+          if (state.currentStroke.indexOf(index) === -1) {
+            state.currentStroke.push(index);
+          }
+        });
+      }
+      state.selectedIndices.sort(function(a, b) { return a - b; });
+      rebuildVertexPaintMarkers(state);
+      publishVertexSelection(state);
+    }
+
+    function commitVertexPaintStroke(state) {
+      if (!state || !state.currentStroke || !state.currentStroke.length) {
+        return;
+      }
+      state.undoStack.push(state.currentStroke.slice());
+      state.currentStroke = [];
+      publishVertexSelection(state);
+    }
+
+    function undoVertexPaintStroke(state) {
+      if (!state || !state.undoStack.length) {
+        return;
+      }
+      var removed = state.undoStack.pop();
+      removed.forEach(function(index) {
+        delete state.selectedIndexMap[index];
+      });
+      state.selectedIndices = state.selectedIndices.filter(function(index) {
+        return !!state.selectedIndexMap[index];
+      });
+      rebuildVertexPaintMarkers(state);
+      publishVertexSelection(state);
+    }
+
+    function resetVertexPaintSelection(state) {
+      if (!state) {
+        return;
+      }
+      state.selectedIndexMap = {};
+      state.selectedIndices = [];
+      state.undoStack = [];
+      state.currentStroke = [];
+      rebuildVertexPaintMarkers(state);
+      publishVertexSelection(state);
+    }
+
+    function nearestMirroredVertexIndex(state, index, axis) {
+      if (!state || !state.localPositions) {
+        return null;
+      }
+      var axisIndex = axis === "x" ? 0 : axis === "y" ? 1 : 2;
+      var offset = (index - 1) * 3;
+      if (offset < 0 || offset + 2 >= state.localPositions.length) {
+        return null;
+      }
+      var target = [
+        state.localPositions[offset],
+        state.localPositions[offset + 1],
+        state.localPositions[offset + 2]
+      ];
+      target[axisIndex] = -target[axisIndex];
+      var bestIndex = null;
+      var bestDistance = Infinity;
+      for (var i = 0; i < state.localPositions.length; i += 3) {
+        var dx = state.localPositions[i] - target[0];
+        var dy = state.localPositions[i + 1] - target[1];
+        var dz = state.localPositions[i + 2] - target[2];
+        var distance = dx * dx + dy * dy + dz * dz;
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestIndex = (i / 3) + 1;
+        }
+      }
+      return bestIndex;
+    }
+
+    function toggleVertexPaintSymmetry(state, axis) {
+      if (!state) {
+        return;
+      }
+      state.symmetry = state.symmetry || {x: false, y: false, z: false};
+      state.symmetry[axis] = !state.symmetry[axis];
+      publishVertexSelection(state);
+    }
+
+    function brushedVertexIndices(state, pickedPoint) {
+      if (!state || !pickedPoint || !state.localPositions) {
+        return [];
+      }
+      var out = [];
+      var radiusSq = state.brushRadius * state.brushRadius;
+      state.mesh.computeWorldMatrix(true);
+      var worldMatrix = state.mesh.getWorldMatrix();
+      for (var i = 0; i < state.localPositions.length; i += 3) {
+        var localPoint = BABYLON.Vector3.FromArray(state.localPositions, i);
+        var worldPoint = BABYLON.Vector3.TransformCoordinates(localPoint, worldMatrix);
+        if (BABYLON.Vector3.DistanceSquared(worldPoint, pickedPoint) <= radiusSq) {
+          out.push((i / 3) + 1);
+        }
+      }
+      return out;
+    }
+
     function setSnapshotPreviewVisible(state, visible) {
       if (!state || state.mode !== "edit_scene3d") {
         return;
@@ -3934,6 +4321,11 @@ HTMLWidgets.widget({
       if (publishViewStateHandle !== null) {
         window.cancelAnimationFrame(publishViewStateHandle);
         publishViewStateHandle = null;
+      }
+
+      if (window.__babylonianPaintKeyHandler) {
+        window.removeEventListener("keydown", window.__babylonianPaintKeyHandler);
+        window.__babylonianPaintKeyHandler = null;
       }
 
       if (interaction && interaction.mode === "edit_scene3d") {
@@ -4068,6 +4460,108 @@ HTMLWidgets.widget({
         };
         schedulePoseStatePublish();
         return activeInteractionState;
+      }
+
+      if (interaction && interaction.mode === "paint_vertices" && primaryMesh) {
+        var paintState = {
+          mode: interaction.mode,
+          widgetId: el.id || null,
+          mesh: primaryMesh,
+          markerColor: interaction.marker && interaction.marker.color ? interaction.marker.color : "#dc2626",
+          markerScale: interaction.marker && interaction.marker.scale ? interaction.marker.scale : 0.012,
+          markerSize: meshRadius(primaryMesh) * (interaction.marker && interaction.marker.scale ? interaction.marker.scale : 0.012),
+          brushRadius: Math.max(meshRadius(primaryMesh) * 0.03, 0.001),
+          brushRadiusMin: Math.max(meshRadius(primaryMesh) * 0.005, 0.0002),
+          brushRadiusMax: Math.max(meshRadius(primaryMesh) * 0.15, 0.004),
+          brushRadiusStep: Math.max(meshRadius(primaryMesh) * 0.0025, 0.0001),
+          localPositions: primaryMesh.getVerticesData ? (primaryMesh.getVerticesData(BABYLON.VertexBuffer.PositionKind) || []) : [],
+          selectedIndices: [],
+          selectedIndexMap: {},
+          undoStack: [],
+          currentStroke: [],
+          markers: [],
+          overlayMesh: null,
+          symmetry: {x: false, y: false, z: false},
+          paintingEnabled: true,
+          pointerDown: false,
+          pointerControlsDetached: false,
+          dispose: function() {
+            clearUiPanel();
+            if (paintState.pointerControlsDetached && camera && camera.inputs && camera.inputs.attached && camera.inputs.attached.pointers && typeof camera.inputs.attached.pointers.attachControl === "function") {
+              camera.inputs.attached.pointers.attachControl(canvas);
+              paintState.pointerControlsDetached = false;
+            }
+            if (paintState.overlayMesh && paintState.overlayMesh.dispose) {
+              paintState.overlayMesh.dispose();
+              paintState.overlayMesh = null;
+            }
+            while (paintState.markers.length) {
+              var marker = paintState.markers.pop();
+              if (marker && marker.dispose) {
+                marker.dispose();
+              }
+            }
+            if (paintState.pointerObserver) {
+              scene.onPointerObservable.remove(paintState.pointerObserver);
+              paintState.pointerObserver = null;
+            }
+            if (window.__babylonianPaintKeyHandler) {
+              window.removeEventListener("keydown", window.__babylonianPaintKeyHandler);
+              window.__babylonianPaintKeyHandler = null;
+            }
+          }
+        };
+        activeInteractionState = paintState;
+        paintState.pointerObserver = scene.onPointerObservable.add(function(pointerInfo) {
+          if (!pointerInfo) {
+            return;
+          }
+          if (pointerInfo.type === BABYLON.PointerEventTypes.POINTERDOWN) {
+            paintState.pointerDown = true;
+            paintState.currentStroke = [];
+          } else if (pointerInfo.type === BABYLON.PointerEventTypes.POINTERUP) {
+            paintState.pointerDown = false;
+            commitVertexPaintStroke(paintState);
+            return;
+          }
+
+          if (!paintState.paintingEnabled) {
+            return;
+          }
+          if (pointerInfo.type !== BABYLON.PointerEventTypes.POINTERDOWN &&
+              pointerInfo.type !== BABYLON.PointerEventTypes.POINTERMOVE) {
+            return;
+          }
+          if (pointerInfo.type === BABYLON.PointerEventTypes.POINTERMOVE && !paintState.pointerDown) {
+            return;
+          }
+
+          var pickInfo = scene.pick(scene.pointerX, scene.pointerY, function(mesh) {
+            return mesh === primaryMesh;
+          });
+          if (!pickInfo || !pickInfo.hit || pickInfo.pickedMesh !== primaryMesh || !pickInfo.pickedPoint) {
+            return;
+          }
+          addVertexPaintIndices(
+            paintState,
+            brushedVertexIndices(paintState, pickInfo.pickedPoint.clone()),
+            false
+          );
+        });
+        window.__babylonianPaintKeyHandler = function(evt) {
+          if (!activeInteractionState || activeInteractionState !== paintState) {
+            return;
+          }
+          if ((evt.key || "").toLowerCase() !== "p") {
+            return;
+          }
+          evt.preventDefault();
+          paintState.paintingEnabled = !paintState.paintingEnabled;
+          publishVertexSelection(paintState);
+        };
+        window.addEventListener("keydown", window.__babylonianPaintKeyHandler);
+        publishVertexSelection(paintState);
+        return paintState;
       }
 
       if (!interaction || interaction.mode !== "digitize_landmarks" || !primaryMesh) {
@@ -4378,7 +4872,7 @@ HTMLWidgets.widget({
           roughness: 1,
           alpha: 1,
           wireframe: false,
-          backface_culling: true,
+          backface_culling: false,
           unlit: false
         };
       }
@@ -4389,7 +4883,7 @@ HTMLWidgets.widget({
         specular: "#000000",
         alpha: 1,
         wireframe: false,
-        backface_culling: true
+        backface_culling: false
       };
     }
 
@@ -4438,7 +4932,7 @@ HTMLWidgets.widget({
         existing.wireframe = !!(target.primitive && target.primitive.wireframe);
       }
       if (existing.backface_culling === undefined) {
-        existing.backface_culling = true;
+        existing.backface_culling = false;
       }
 
       return existing;

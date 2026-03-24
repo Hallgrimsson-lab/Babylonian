@@ -314,6 +314,8 @@ babylon(
 
 # clip away submeshes/ parts of the scene - UX bad
 # paint vertices index w/ symmetry support
+idx <- paint_vertices3d(mesh)
+
 
 #done
 # scale bars
@@ -395,3 +397,56 @@ testscene <- babylon(
 )
 
 edit_scene3d(testscene)
+
+plot3d(mesh)
+
+edit_scene3d(shade3d(mesh2))
+
+
+crouzon_intercept <- file2mesh(file = system.file("extdata", "Crouzon Syndrome_intercept.ply", package = "Babylonian"))
+crouzon_age <- file2mesh(file = system.file("extdata", "Crouzon Syndrome_age.ply", package = "Babylonian"))
+crouzon_sex <- file2mesh(file = system.file("extdata", "Crouzon Syndrome_sex.ply", package = "Babylonian"))
+crouzon_severity <- file2mesh(file = system.file("extdata", "Crouzon Syndrome_severity.ply", package = "Babylonian"))
+# adjust amount of age displacement for crouzon
+age_vec <- (crouzon_age$vb - crouzon_intercept$vb)/2 + crouzon_intercept$vb
+crouzon_age$vb <- age_vec
+sex_vec <- (crouzon_sex$vb - crouzon_intercept$vb)*4 + crouzon_intercept$vb
+crouzon_sex$vb <- sex_vec
+sev_vec <- (crouzon_severity$vb - crouzon_intercept$vb)/2 + crouzon_intercept$vb
+crouzon_severity$vb <- sev_vec
+
+plot3d(crouzon_severity)
+
+mesh2ply(crouzon_age, filename = "inst/extdata/Crouzon Syndrome_age")
+mesh2ply(crouzon_sex, filename = "inst/extdata/Crouzon Syndrome_sex")
+mesh2ply(crouzon_severity, filename = "inst/extdata/Crouzon Syndrome_severity")
+
+
+# build as targets on intercept
+morphed_mesh <- morph_target3d(crouzon_intercept, crouzon_age, influence = 0.2, name = "age50")
+morphed_mesh <- morph_target3d(morphed_mesh, crouzon_sex, influence = 0.5, name = "maleness")
+morphed_mesh <- morph_target3d(morphed_mesh, crouzon_severity, influence = 0, name = "severity")
+
+state <- edit_scene3d(morphed_mesh)
+scene <- apply_scene_state(scene, state = state)
+snapshot3d("morph-scene.png", widget = scene)
+
+
+test1 <- file2mesh("~/Documents/PhenomicsLabs/phase2_outputs/optimizer_testing_diagnostic/mesh_exports/ground_truth_subset.obj")
+test2 <- file2mesh("~/Documents/PhenomicsLabs/phase2_outputs/optimizer_testing_diagnostic/mesh_exports/151111141448_1_fit_subset.obj")
+
+testarray <- array(NA, dim = c(ncol(test1$vb), 3, 2))
+testarray[,,1] <- t(test1$vb[-4,])
+testarray[,,2] <- t(test2$vb[-4,])
+
+testgpa <- procSym(testarray)
+
+test1$vb[-4,] <- t(testgpa$rotated[,,1]*testgpa$size[1])
+test2$vb[-4,] <- t(testgpa$rotated[,,2]*testgpa$size[2])
+
+plot3d(test1)
+shade3d(test2, color = "orange", alpha = .5)
+
+bg3d("black")
+meshDist(test1, test2, alpha = 0, displace = T, from = -2, to = 2)
+edit_scene3d(shade3d)

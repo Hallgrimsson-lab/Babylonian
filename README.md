@@ -53,8 +53,7 @@ bg3d("black")
 plot3d(mesh)
 ```
 
-Babylonian also supports inline rendering of scenes in R/Quarto notebooks. Just use it like you normally would.
-
+Babylonian also supports inline rendering of scenes in R/Quarto notebooks. Just plot like you normally would.
 
 ## Common Wrappers
 
@@ -159,24 +158,47 @@ digit.fixed(
 )
 ```
 
+### Vertex painting
+
+If you want to select a whole region of vertices instead of landmarking, you can use `paint_vertices3d()`. This widget lets you select a radius size, paint, undo your last selection, and reset the selection. If you're indexing a symmetric object along x/y/z axes, you can toggle the symmetry options to also capture the other side. This function returns the painted indices of the mesh.
+
+```r
+
+idx <- paint_vertices3d(mesh)
+plot3d(mesh)
+points3d(t(mesh$vb[1:3, idx]))
+
+```
+
+GIF placeholder: [landmarking-demo.gif](inst/extdata/landmarking-demo.gif)
+
 ### Heatmaps
 
 To compare two matching-topology meshes, `meshDist()` colors the reference mesh by signed vertex displacement and can optionally overlay displacement vectors:
 
 ``` r
-meshDist(reference_mesh, target_mesh, displace = TRUE)
+
+crouzon_intercept <- file2mesh(file = system.file("extdata", "Crouzon Syndrome_intercept.ply", package = "Babylonian"))
+crouzon_age <- file2mesh(file = system.file("extdata", "Crouzon Syndrome_age.ply", package = "Babylonian"))
+
+bg3d("black")
+meshDist(crouzon_intercept, crouzon_age, alpha = 0, displace = TRUE, backface_culling = F)
+
 ```
 
-You can also work from a precomputed per-vertex distance vector:
+You can also make a heatmap from a pre-computed per-vertex distance vector:
 
 ``` r
-meshDist(reference_mesh, distvec = your_distvec)
+
+# distance matrix from the first point (on the nose)
+meshDist(mesh, distvec = sqrt(colSums((mesh$vb[-4,] - mesh$vb[-4, 1])^2)))
+
 ```
 
 To plot only the corresponding heatmap scale as a 2D graphic, use `heatmap_scale()` with the same arguments you passed to `meshDist()` :
 
 ``` r
-heatmap_scale(reference_mesh, target_mesh)
+heatmap_scale(mesh, distvec = sqrt(colSums((mesh$vb[-4,] - mesh$vb[-4, 1])^2)))
 ```
 
 ### Morphing
@@ -184,30 +206,28 @@ heatmap_scale(reference_mesh, target_mesh)
 We offer a quick utility for creating morph targets for interactive inspection with `morph_target3d()`:
 
 ``` r
-scene <- babylon(
-  data = list(
-    morph_target3d(
-      reference_mesh,
-      target_mesh,
-      influence = 0.5,
-      color = "gray75"
-    )
-  )
-)
 
-scene
+# see the midpoint between mesh and mesh2
+morphed_mesh <- morph_target3d(mesh, mesh2, influence = 0.5, name = "morph1")
+plot3d(morphed_mesh)
+
 ```
 
-You can also combine a morph target with the scene editor, save the resulting camera and lighting setup, and then reuse it:
+You can also use morphtargets interactively with the scene editor (that we'll explain in the next section!), save the resulting camera and lighting setup, and then reuse it:
 
 ``` r
-scene <- babylon(
-  data = list(
-    morph_target3d(reference_mesh, target_mesh, influence = 0.25, color = "gray75")
-  )
-)
+# how the syndrome atlas works--morphtargets on a base mesh
+crouzon_intercept <- file2mesh(file = system.file("extdata", "Crouzon Syndrome_intercept.ply", package = "Babylonian"))
+crouzon_age <- file2mesh(file = system.file("extdata", "Crouzon Syndrome_age.ply", package = "Babylonian"))
+crouzon_sex <- file2mesh(file = system.file("extdata", "Crouzon Syndrome_sex.ply", package = "Babylonian"))
+crouzon_severity <- file2mesh(file = system.file("extdata", "Crouzon Syndrome_severity.ply", package = "Babylonian"))
 
-state <- edit_scene3d(scene)
+# build as targets on intercept
+morphed_mesh <- morph_target3d(crouzon_intercept, crouzon_age, influence = 0.2, name = "age50")
+morphed_mesh <- morph_target3d(morphed_mesh, crouzon_sex, influence = 0.5, name = "maleness")
+morphed_mesh <- morph_target3d(morphed_mesh, crouzon_severity, influence = 0, name = "severity")
+
+state <- edit_scene3d(morphed_mesh)
 scene <- apply_scene_state(scene, state = state)
 snapshot3d("morph-scene.png", widget = scene)
 ```
@@ -229,6 +249,7 @@ We offer several utilities for easy figure making and screenshotting (to .png & 
 pose <- create_pose_3d(mesh)
 par3d(zoom = pose$zoom, userMatrix = pose$userMatrix, bg = pose$bg)
 plot3d(mesh)
+
 ```
 
 `edit_scene3d()` is a more fully-featured GUI for creating a scene and either directly screenshotting from within the widget, or for applying the scene settings to future uses. From within `edit_scene3d()` you can pose meshes with the camera, move/rotate/scale meshes about the scene, create and adjust lights, and several more things. When you're happy with your scene you can save the snapshot directly or click done and apply the scene programatically across many meshes.  
@@ -240,7 +261,7 @@ state <- edit_scene3d(scene)
 scene <- apply_scene_state(scene, state = state)
 snapshot3d("edited-scene.png", widget = scene)
 
-# set scene on first mesh and use the state across multiple meshes.
+# set scene on first mesh and use the state across multiple meshes
 my_mesh_list <- list(mesh, mesh2)
 for(i in 1:2){
   scene <- apply_scene_state(plot3d(my_mesh_list[i]), state = state) # how to create a meshlist??
@@ -251,6 +272,23 @@ for(i in 1:2){
 
 GIF placeholder: [scene-editor-demo.gif](inst/extdata/scene-editor-demo.gif)
 
+There are a couple ways to get multiple meshes into the scene editor for posing:
+```r
+
+# build up a scene piecemeal and edit
+plot3d(mesh)
+edit_scene3d(shade3d(mesh2, color = "red"))
+
+# use lower level functions to build the scene with multiple meshes from the get go
+scene <- babylon(data = list(
+    as_babylon_mesh(mesh, color = "gray75"),
+    as_babylon_mesh(mesh2, color = "yellow"),
+  )
+)
+
+scene_state <- edit_scene3d(scene)
+
+```
 
 ### Animation
 
@@ -261,51 +299,56 @@ GIF placeholder: [animation-demo.gif](inst/extdata/animation-demo.gif)
 Create a morphing scene:
 
 ``` r
-scene <- babylon(
-  data = list(
-    morph_target3d(reference_mesh, target_mesh, influence = 0, color = "gray75")
-  )
-)
+
+scene <- plot3d(morph_target3d(crouzon_intercept, crouzon_age, influence = 0, color = "gray75"))
+state <- edit_scene3d(scene)
+scene <- apply_scene_state(scene, state)
+
 ```
 
 Generate a camera orbit path:
 
 ``` r
-views <- orbit_path3d(n = 120, axis = "y", zoom = 1.1)
+
+views <- orbit_path3d(n = 15, axis = "y", zoom = 1.1)
+
 ```
 
 Render frames directly if you want the PNG sequence:
 
 ``` r
+
 render_frames3d(
   scene,
   dir = "frames",
   views = views,
-  morph = morph_path3d(n = 120, from = 0, to = 1)
+  morph = morph_path3d(n = 15, from = 0, to = .5)
 )
+
 ```
 
 Or encode a movie or GIF in one step:
 
 ``` r
+
 record_scene3d(
   scene,
   file = "turntable.mp4",
-  views = views,
-  morph = morph_path3d(n = 120, from = 0, to = 1)
+  morph = morph_path3d(n = 45, from = 0, to = .5)
 )
 
 record_scene3d(
   scene,
   file = "heatmap-turntable.mp4",
   views = views,
-  morph = morph_path3d(n = 120, from = 0, to = 1),
+  morph = morph_path3d(n = 15, from = 0, to = 1),
   heatmap = TRUE,
   heatmap_args = list(
-    alpha = 0.4,
+    alpha = 0,
     displace = TRUE
   )
 )
+
 ```
 
 ## Experimental: Imported Assets And Advanced Materials
@@ -422,11 +465,18 @@ plot3d(mesh)
 To load a node material export from `inst/extdata`, use:
 
 ``` r
+
+# toon shader, wut. Need to add light blocks to the material to make it responsive to scene lights...
 node_mat <- node_material3d(
   file = system.file("extdata", "nodeMaterial-demo.json", package = "Babylonian")
 )
 
+# options for adding materials to meshes
 plot3d(
-  as_babylon_mesh(your_morpho_mesh, material = node_mat)
+  as_babylon_mesh(mesh, material = node_mat)
 )
 ```
+
+## The material registry
+
+Different types of materials can be created/loaded into memory and registered. This registry can be used in the scene editor to assign materials to meshes.

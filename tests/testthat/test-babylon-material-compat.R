@@ -774,6 +774,21 @@ testthat::test_that("morph_target3d validates mesh topology", {
   )
 })
 
+testthat::test_that("paint_vertices3d returns a painting widget in non-interactive mode", {
+  mesh <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0),
+      c(0, 1, 0)
+    )
+  )
+
+  widget <- paint_vertices3d(mesh)
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_identical(widget$x$interaction$mode, "paint_vertices")
+})
+
 testthat::test_that("orbit_path3d returns normalized view states", {
   par3d(zoom = 0.8, userMatrix = diag(4), bg = "white")
   path <- orbit_path3d(n = 4, axis = "z", turns = 0.5, zoom = 1.25)

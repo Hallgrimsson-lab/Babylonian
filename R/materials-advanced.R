@@ -146,7 +146,7 @@ standard_material3d <- function(
   emissive = NULL,
   alpha = NULL,
   wireframe = FALSE,
-  backface_culling = TRUE,
+  backface_culling = FALSE,
   name = NULL
 ) {
   material <- list(
@@ -202,7 +202,7 @@ pbr_material3d <- function(
   emissive = NULL,
   alpha = NULL,
   wireframe = FALSE,
-  backface_culling = TRUE,
+  backface_culling = FALSE,
   unlit = FALSE,
   name = NULL
 ) {
@@ -271,7 +271,7 @@ shader_material3d <- function(
   uniforms = NULL,
   textures = NULL,
   alpha = NULL,
-  backface_culling = TRUE
+  backface_culling = FALSE
 ) {
   if (!is.character(name) || !length(name) || !nzchar(name[[1]])) {
     stop("`name` must be a non-empty string.", call. = FALSE)
@@ -318,7 +318,7 @@ node_material3d <- function(
   json = NULL,
   params = NULL,
   alpha = NULL,
-  backface_culling = TRUE,
+  backface_culling = FALSE,
   name = NULL
 ) {
   if (is.null(file) && is.null(json)) {
