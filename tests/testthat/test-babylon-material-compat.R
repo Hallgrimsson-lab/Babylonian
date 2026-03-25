@@ -937,6 +937,36 @@ testthat::test_that("scale bar units survive scene normalization", {
   testthat::expect_identical(scene$scale_bar$custom_units, "mya")
 })
 
+testthat::test_that("scale bar positions normalize from corners and coordinates", {
+  scene_keyword <- normalize_scene(list(
+    scale_bar = list(
+      enabled = TRUE,
+      length = 5,
+      position = "topleft"
+    )
+  ))
+  scene_coords <- normalize_scene(list(
+    scale_bar = list(
+      enabled = TRUE,
+      length = 5,
+      position = c(20, 30)
+    )
+  ))
+
+  testthat::expect_identical(scene_keyword$scale_bar$position, "topleft")
+  testthat::expect_equal(scene_coords$scale_bar$position, c(20, 30))
+})
+
+testthat::test_that("scaleBar3d stores scale bar scene metadata", {
+  clear_scene3d()
+  widget <- scaleBar3d(length = 10, units = "mm", position = "bottomleft", add = FALSE)
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_equal(widget$x$scene$scale_bar$length, 10)
+  testthat::expect_identical(widget$x$scene$scale_bar$units, "mm")
+  testthat::expect_identical(widget$x$scene$scale_bar$position, "bottomleft")
+})
+
 testthat::test_that("scale bar custom units may be temporarily blank in editor state", {
   scene <- normalize_scene(list(
     scale_bar = list(

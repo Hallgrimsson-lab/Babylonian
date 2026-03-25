@@ -271,7 +271,28 @@ normalize_scene_scale_bar <- function(x) {
     }
   }
 
+  if (!is.null(x$position)) {
+    out$position <- normalize_scale_bar_position(x$position)
+  }
+
   out
+}
+
+normalize_scale_bar_position <- function(x) {
+  if (is.character(x) && length(x)) {
+    position <- tolower(as.character(x[[1]]))
+    allowed <- c("topleft", "topright", "bottomleft", "bottomright")
+    if (!(position %in% allowed)) {
+      stop("`scale_bar$position` must be one of `topleft`, `topright`, `bottomleft`, `bottomright`, or a numeric vector of length 2.", call. = FALSE)
+    }
+    return(position)
+  }
+
+  coords <- as.numeric(x)
+  if (length(coords) != 2L || any(!is.finite(coords))) {
+    stop("`scale_bar$position` must be one of `topleft`, `topright`, `bottomleft`, `bottomright`, or a numeric vector of length 2.", call. = FALSE)
+  }
+  unname(coords)
 }
 
 normalize_scene_clipping <- function(x) {

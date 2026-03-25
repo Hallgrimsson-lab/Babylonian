@@ -1608,6 +1608,10 @@ HTMLWidgets.widget({
     function clearScaleBar() {
       scaleBarLayer.style.display = "none";
       scaleBarLayer.innerHTML = "";
+      scaleBarLayer.style.left = "";
+      scaleBarLayer.style.right = "";
+      scaleBarLayer.style.top = "";
+      scaleBarLayer.style.bottom = "";
     }
 
     function clearClipping() {
@@ -5373,6 +5377,25 @@ HTMLWidgets.widget({
       var unitLabel = units === "other" ? (sceneOptions.scale_bar.custom_units || "") : (units || "");
       var label = sceneOptions.scale_bar.label || (formatRNumber(length) + (unitLabel ? " " + unitLabel : ""));
       var width = Math.max(1, Math.round(pixelLength));
+      var position = sceneOptions.scale_bar.position || "bottomright";
+
+      if (Array.isArray(position) && position.length === 2) {
+        scaleBarLayer.style.left = Number(position[0]) + "px";
+        scaleBarLayer.style.top = Number(position[1]) + "px";
+      } else if (position === "topleft") {
+        scaleBarLayer.style.left = "12px";
+        scaleBarLayer.style.top = "12px";
+      } else if (position === "topright") {
+        scaleBarLayer.style.right = "12px";
+        scaleBarLayer.style.top = "12px";
+      } else if (position === "bottomleft") {
+        scaleBarLayer.style.left = "12px";
+        scaleBarLayer.style.bottom = "12px";
+      } else {
+        scaleBarLayer.style.right = "12px";
+        scaleBarLayer.style.bottom = "12px";
+      }
+
       scaleBarLayer.style.display = "block";
       scaleBarLayer.innerHTML =
         "<div style='padding:8px 10px; background:rgba(255,255,255,0.92); border:1px solid rgba(15,23,42,0.12); border-radius:8px; box-shadow:0 10px 30px rgba(15,23,42,0.12); color:#0f172a; font-family:Menlo, Monaco, Consolas, monospace; font-size:12px; line-height:1.2;'>" +

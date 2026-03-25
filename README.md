@@ -104,6 +104,16 @@ shade3d(mesh, color = "gray75", specularity = 0.3, add = FALSE)
 wireframe3d(mesh, color = "black")
 ```
 
+Adding scale bars to your 3D plots:
+
+```r
+
+plot3d(mesh)
+scaleBar3d(length = 100, units = "mm", position = "bottomleft")
+
+
+```
+
 BabylonJS light types are available through `light3d()` and dedicated wrappers:
 
 ``` r
@@ -327,6 +337,9 @@ render_frames3d(
   views = views,
   morph = morph_path3d(n = 15, from = 0, to = .5)
 )
+
+# turn frames into a movie manually
+
 
 ```
 

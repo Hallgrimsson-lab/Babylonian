@@ -412,6 +412,48 @@ title3d <- function(main = NULL, sub = NULL, xlab = NULL, ylab = NULL, zlab = NU
   babylon(scene_spec$objects, scene = scene_spec$scene)
 }
 
+#' Add a 2D scale bar overlay to the current scene
+#'
+#' @param length Scale bar length in scene units.
+#' @param units Optional unit label such as `"mm"`, `"cm"`,
+#'   `"procrustes distance"`, or `"other"`.
+#' @param custom_units Optional custom unit label used when `units = "other"`.
+#' @param label Optional explicit scale bar label. When omitted, Babylonian
+#'   builds a label from `length` and the unit text.
+#' @param position Corner keyword (`"topleft"`, `"topright"`, `"bottomleft"`,
+#'   `"bottomright"`) or a numeric vector of length 2 giving the top-left
+#'   insertion point in screen pixels.
+#' @param add Whether to add the scale bar to the current scene. Use
+#'   `add = FALSE` to start a fresh empty scene carrying only the scale bar.
+#'
+#' @export
+scaleBar3d <- function(length, units = NULL, custom_units = NULL, label = NULL, position = "bottomright", add = TRUE) {
+  scene_spec <- current_scene_spec()
+
+  if (!isTRUE(add) || is.null(scene_spec)) {
+    scene_spec <- list(
+      objects = list(),
+      scene = list(
+        axes = TRUE,
+        nticks = 5L,
+        view = serialize_par3d(.babylon_state$par3d)
+      )
+    )
+  }
+
+  scene_spec$scene$scale_bar <- normalize_scene_scale_bar(list(
+    enabled = TRUE,
+    length = length,
+    units = units,
+    custom_units = custom_units,
+    label = label,
+    position = position
+  ))
+
+  .babylon_state$current_scene <- scene_spec
+  babylon(scene_spec$objects, scene = scene_spec$scene)
+}
+
 #' Render one or more clipping-style planes
 #'
 #' Planes are specified by coefficients `(a, b, c, d)` for equations of the
