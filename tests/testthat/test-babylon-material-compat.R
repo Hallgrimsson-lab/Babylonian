@@ -46,6 +46,24 @@ testthat::test_that("babylon normalizes scene post-process descriptors", {
   testthat::expect_identical(widget$x$scene$postprocess[[1]]$blur_level, "medium")
 })
 
+testthat::test_that("par3d windowRect sets default widget sizing", {
+  previous_par3d <- .babylon_state$par3d
+  previous_last_scene <- .babylon_state$last_scene_par3d
+  on.exit({
+    .babylon_state$par3d <- previous_par3d
+    .babylon_state$last_scene_par3d <- previous_last_scene
+  }, add = TRUE)
+
+  par3d(reset = TRUE)
+  state <- par3d(windowRect = c(0, 0, 800, 800), zoom = 0.65)
+  widget <- babylon(data = list(as_babylon_points(matrix(c(0, 0, 0), ncol = 3))))
+
+  testthat::expect_equal(state$windowRect, c(0, 0, 800, 800))
+  testthat::expect_identical(widget$width, 800L)
+  testthat::expect_identical(widget$height, 800L)
+  testthat::expect_equal(widget$x$scene$view$windowRect, c(0, 0, 800, 800))
+})
+
 testthat::test_that("scene editor state carries and reapplies post-process settings", {
   widget <- babylon(
     data = list(as_babylon_points(matrix(c(0, 0, 0), ncol = 3))),
@@ -114,6 +132,68 @@ testthat::test_that("numeric palette indices normalize using the active palette"
   testthat::expect_type(value, "character")
   testthat::expect_equal(nchar(value), 7L)
   testthat::expect_match(value, "^#[0-9A-F]{6}$")
+})
+
+testthat::test_that("lines3d creates connected line primitives", {
+  widget <- lines3d(
+    x = c(0, 1, 1),
+    y = c(0, 0, 1),
+    z = c(0, 0, 0),
+    add = FALSE,
+    axes = FALSE
+  )
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_identical(widget$x$objects[[1]]$type, "lines3d")
+  testthat::expect_equal(nrow(widget$x$objects[[1]]$points), 3L)
+})
+
+testthat::test_that("spheres3d applies rgl-compatible radius scaling", {
+  widget <- spheres3d(0, 0, 0, radius = 0.12, add = FALSE, axes = FALSE)
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_identical(widget$x$objects[[1]]$type, "spheres3d")
+  testthat::expect_equal(widget$x$objects[[1]]$radius, 0.01)
+})
+
+testthat::test_that("text3d creates projected text primitives", {
+  widget <- text3d(
+    x = c(0, 1),
+    y = c(0, 1),
+    z = c(0, 0),
+    texts = c("a", "b"),
+    add = FALSE,
+    axes = FALSE
+  )
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_identical(widget$x$objects[[1]]$type, "text3d")
+  testthat::expect_identical(widget$x$objects[[1]]$texts, c("a", "b"))
+})
+
+testthat::test_that("title3d stores scene title metadata", {
+  clear_scene3d()
+  widget <- title3d(main = "Main", sub = "Sub", xlab = "X", ylab = "Y", zlab = "Z", add = FALSE)
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_identical(widget$x$scene$title$main, "Main")
+  testthat::expect_identical(widget$x$scene$title$sub, "Sub")
+  testthat::expect_identical(widget$x$scene$title$xlab, "X")
+})
+
+testthat::test_that("planes3d fits a plane from three points", {
+  pts <- rbind(
+    c(0, 0, 0),
+    c(1, 0, 0),
+    c(0, 1, 0)
+  )
+
+  widget <- planes3d(pts, add = FALSE, axes = FALSE)
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_identical(widget$x$objects[[1]]$type, "planes3d")
+  testthat::expect_equal(dim(widget$x$objects[[1]]$coefficients), c(1L, 4L))
+  testthat::expect_equal(widget$x$objects[[1]]$coefficients[1, 4], 0)
 })
 
 testthat::test_that("numeric RGB vectors normalize from 0-1 and 0-255 ranges", {
@@ -841,6 +921,36 @@ testthat::test_that("par3d and bg3d persist the scene background color", {
   testthat::expect_identical(deserialize_par3d(serialized)$bg, "#000000")
 })
 
+testthat::test_that("scale bar units survive scene normalization", {
+  scene <- normalize_scene(list(
+    scale_bar = list(
+      enabled = TRUE,
+      length = 5,
+      units = "other",
+      custom_units = "mya"
+    )
+  ))
+
+  testthat::expect_true(scene$scale_bar$enabled)
+  testthat::expect_equal(scene$scale_bar$length, 5)
+  testthat::expect_identical(scene$scale_bar$units, "other")
+  testthat::expect_identical(scene$scale_bar$custom_units, "mya")
+})
+
+testthat::test_that("scale bar custom units may be temporarily blank in editor state", {
+  scene <- normalize_scene(list(
+    scale_bar = list(
+      enabled = TRUE,
+      length = 5,
+      units = "other",
+      custom_units = ""
+    )
+  ))
+
+  testthat::expect_identical(scene$scale_bar$units, "other")
+  testthat::expect_null(scene$scale_bar$custom_units %||% NULL)
+})
+
 testthat::test_that("morph_path3d returns eased numeric sequences", {
   path <- morph_path3d(n = 5, from = 0, to = 1, easing = "ease_in_out")
 
@@ -1472,6 +1582,50 @@ testthat::test_that("meshDist supports signed distvec input", {
   testthat::expect_equal(info$limits, c(-0.3, 0.3))
   testthat::expect_equal(length(widget$x$objects), 2L)
   testthat::expect_equal(length(widget$x$objects[[1]]$vertex_attributes$comparisonPosition$data), 9L)
+})
+
+testthat::test_that("meshDist heatmap material is double-sided", {
+  reference <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0),
+      c(0, 1, 0)
+    )
+  )
+  target <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0.1),
+      c(1, 0, 0.1),
+      c(0, 1, 0.1)
+    )
+  )
+
+  widget <- meshDist(reference, target, axes = FALSE)
+
+  testthat::expect_identical(widget$x$objects[[1]]$material$type, "shader")
+  testthat::expect_false(widget$x$objects[[1]]$material$backface_culling)
+})
+
+testthat::test_that("meshDist heatmap stays transparent without depth prepass metadata", {
+  reference <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0),
+      c(0, 1, 0)
+    )
+  )
+  target <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0.1),
+      c(1, 0, 0.1),
+      c(0, 1, 0.1)
+    )
+  )
+
+  widget <- meshDist(reference, target, alpha = 0.4, axes = FALSE)
+
+  testthat::expect_equal(widget$x$objects[[1]]$material$alpha, 0.4)
+  testthat::expect_identical(widget$x$objects[[1]]$material$type, "shader")
 })
 
 testthat::test_that("heatmap_scale returns a ggplot with matching limits", {

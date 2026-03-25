@@ -182,7 +182,7 @@ comparison_heatmap_vertex_shader <- function() {
     "  float diffValue = dot(comparisonPosition - position, referenceNormal);",
     "  float diffSpan = max(diffMax - diffMin, 0.000001);",
     "  vRampT = clamp((diffValue - diffMin) / diffSpan, 0.0, 1.0);",
-    "  vLight = 0.4 + 0.6 * max(dot(normalDir, normalize(vec3(0.35, 0.8, 0.45))), 0.0);",
+    "  vLight = 0.4 + 0.6 * abs(dot(normalDir, normalize(vec3(0.35, 0.8, 0.45))));",
     "  gl_Position = worldViewProjection * vec4(position, 1.0);",
     "}",
     sep = "\n"

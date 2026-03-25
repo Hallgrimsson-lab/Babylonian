@@ -318,8 +318,8 @@ idx <- paint_vertices3d(mesh)
 
 
 #done
-# scale bars
-# shadow opacity
+# - scale bars
+# - shadow opacity
 # - heatmap/meshdist/wireframe
 # - shader support??
 # - movies
@@ -390,7 +390,7 @@ repro4 <- file2mesh("~/Documents/PhenomicsLabs/backups/alignedRawMeshes/0b93ade6
 testscene <- babylon(
   data = list(
     as_babylon_mesh(repro1, color = "gray75"),
-    as_babylon_mesh(repro2, color = "yellow"),
+    # as_babylon_mesh(repro2, color = "yellow"),
     as_babylon_mesh(repro3, color = "red"),
     as_babylon_mesh(repro4, color = "blue")
   )
@@ -450,3 +450,57 @@ shade3d(test2, color = "orange", alpha = .5)
 bg3d("black")
 meshDist(test1, test2, alpha = 0, displace = T, from = -2, to = 2)
 edit_scene3d(shade3d)
+
+
+
+measure_anteverted_nares <- function(
+    mesh,
+    planeFile     = system.file("extdata", "3pointplane.pp", package = "HPO"),
+    landmarksFile = system.file("extdata", "antervertednares.pp", package = "HPO"),
+    plot          = FALSE
+) {
+  if (!inherits(mesh, "mesh3d"))
+    stop("`mesh` must be a mesh3d object.", call. = FALSE)
+  
+  # align to atlas
+  sample400 <- sample(1:ncol(atlas$vb), 400)
+  mesh <- rotmesh.onto(
+    mesh,
+    refmat = t(mesh$vb[-4, sample400]),
+    tarmat = t(atlas$vb[-4, sample400]),
+    scale  = FALSE
+  )$mesh
+  
+  # plane
+  plane_pts <- read.mpp(planeFile)
+  # plane_pts <- t(rbind(plane_pts, c(0,0,0)))
+  centroid  <- colMeans(plane_pts)
+  X         <- plane_pts - matrix(centroid, nrow = nrow(plane_pts), ncol = 3, byrow = TRUE)
+  n         <- svd(X)$v[, 3]
+  n         <- n / sqrt(sum(n^2))
+  d0        <- -sum(n * centroid)
+  
+  # nasal landmarks
+  vec_idx      <- templateClosestVertices(pointsFile = landmarksFile)
+  vec_vertices <- t(mesh$vb[-4, vec_idx])
+  nasal_tip    <- vec_vertices[1, ]
+  columella    <- vec_vertices[2, ]
+  v            <- nasal_tip - columella
+  
+  cos_vn    <- abs(sum(v * n)) / sqrt(sum(v^2))
+  angle_deg <- 90 - acos(cos_vn) * 180 / pi
+  
+  if (plot) {
+    # rgl::par3d(windowRect = c(20, 20, 820, 820), zoom = .75, userMatrix = front.face)
+    plot3d(mesh, aspect = "iso", col = "lightgrey", alpha = 0.3)
+    # planes3d(a = n[1], b = n[2], c = n[3], d = d0, col = "cyan", alpha = 0.4)
+    spheres3d(plane_pts,    col = "blue",   radius = .15)
+    spheres3d(vec_vertices, col = "yellow", radius = .15)
+    segments3d(rbind(columella, nasal_tip), col = "red")
+  }
+  
+  angle_deg
+}
+
+measure_anteverted_nares(mesh, plot = T)
+

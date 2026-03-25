@@ -4,7 +4,8 @@
 .babylon_state$par3d <- list(
   zoom = 0.05,
   userMatrix = diag(4),
-  bg = "#FAFAFA"
+  bg = "#FAFAFA",
+  windowRect = c(0, 0, 800, 800)
 )
 .babylon_state$last_scene_par3d <- .babylon_state$par3d
 .babylon_state$last_live_par3d <- NULL

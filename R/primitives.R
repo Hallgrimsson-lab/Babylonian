@@ -181,10 +181,18 @@ points3d <- function(
   append_current_scene(points, add = add, axes = axes, nticks = nticks)
 }
 
+# Babylon spheres read larger than rgl spheres for the same nominal radius, so
+# keep a small compatibility factor here to better match rgl expectations.
+rgl_sphere_radius_factor <- function() {
+  1 / 12
+}
+
 #' Render a 3D scatterplot with spheres
 #'
 #' @param x,y,z Point coordinates.
-#' @param radius Sphere radius relative to scene radius.
+#' @param radius Sphere radius relative to scene radius. Babylonian applies a
+#'   small compatibility factor internally so values feel closer to
+#'   `rgl::spheres3d()`.
 #' @param color Sphere color, or a vector of colors with one entry per point.
 #' @param alpha Sphere opacity.
 #' @param specularity Optional sphere specularity.
@@ -209,6 +217,7 @@ spheres3d <- function(
 ) {
   points <- xyz_matrix(x, y, z)
   color <- normalize_point_colors(color, nrow(points))
+  radius <- as.numeric(radius[[1]]) * rgl_sphere_radius_factor()
 
   spheres <- list(
     type = "spheres3d",
@@ -270,13 +279,147 @@ segments3d <- function(
   append_current_scene(segments, add = add, axes = axes, nticks = nticks)
 }
 
+#' Render connected 3D lines
+#'
+#' Consecutive points are connected into a single polyline, mirroring the feel
+#' of `rgl::lines3d()`.
+#'
+#' @param x,y,z Line coordinates.
+#' @param color Line color.
+#' @param alpha Reserved for future transparency support.
+#' @param width Relative line width hint.
+#' @param add Whether to add the object to the current Babylonian scene. Use
+#'   `add = FALSE` to start a fresh scene.
+#' @param axes Whether to draw lightweight scene axes, ticks, labels, and a
+#'   bounding box.
+#' @param nticks Approximate number of tick marks per axis when `axes = TRUE`.
+#'
+#' @export
+lines3d <- function(
+  x,
+  y = NULL,
+  z = NULL,
+  color = "black",
+  alpha = 1,
+  width = 1,
+  add = TRUE,
+  axes = TRUE,
+  nticks = 5
+) {
+  points <- xyz_matrix(x, y, z)
+  if (nrow(points) < 2L) {
+    stop("`lines3d()` requires at least two points.", call. = FALSE)
+  }
+
+  lines <- structure(
+    list(
+      type = "lines3d",
+      points = unname(points),
+      color = normalize_babylon_color(color),
+      alpha = alpha,
+      width = width
+    ),
+    class = c("babylon_lines", "list")
+  )
+
+  append_current_scene(lines, add = add, axes = axes, nticks = nticks)
+}
+
+#' Render lightweight projected 3D text labels
+#'
+#' @param texts Character vector of labels.
+#' @param x,y,z Label coordinates.
+#' @param color Label color.
+#' @param cex Relative text size multiplier.
+#' @param add Whether to add the object to the current Babylonian scene. Use
+#'   `add = FALSE` to start a fresh scene.
+#' @param axes Whether to draw lightweight scene axes, ticks, labels, and a
+#'   bounding box.
+#' @param nticks Approximate number of tick marks per axis when `axes = TRUE`.
+#'
+#' @export
+text3d <- function(
+  x,
+  y = NULL,
+  z = NULL,
+  texts,
+  color = "black",
+  cex = 1,
+  add = TRUE,
+  axes = TRUE,
+  nticks = 5
+) {
+  points <- xyz_matrix(x, y, z)
+  texts <- as.character(texts)
+
+  if (length(texts) == 1L && nrow(points) > 1L) {
+    texts <- rep(texts, nrow(points))
+  }
+  if (length(texts) != nrow(points)) {
+    stop("`text3d()` requires one label per point.", call. = FALSE)
+  }
+
+  labels <- structure(
+    list(
+      type = "text3d",
+      points = unname(points),
+      texts = unname(texts),
+      color = normalize_babylon_color(color),
+      cex = as.numeric(cex[[1]])
+    ),
+    class = c("babylon_text", "list")
+  )
+
+  append_current_scene(labels, add = add, axes = axes, nticks = nticks)
+}
+
+#' Add rgl-style scene titles and axis labels
+#'
+#' @param main Optional main title.
+#' @param sub Optional subtitle.
+#' @param xlab,ylab,zlab Optional axis-label overrides.
+#' @param color Title and label color.
+#' @param cex Relative title size multiplier.
+#' @param add Whether to add the title settings to the current scene. Use
+#'   `add = FALSE` to start a fresh empty scene carrying only the title.
+#'
+#' @export
+title3d <- function(main = NULL, sub = NULL, xlab = NULL, ylab = NULL, zlab = NULL, color = "black", cex = 1, add = TRUE) {
+  scene_spec <- current_scene_spec()
+
+  if (!isTRUE(add) || is.null(scene_spec)) {
+    scene_spec <- list(
+      objects = list(),
+      scene = list(
+        axes = TRUE,
+        nticks = 5L,
+        view = serialize_par3d(.babylon_state$par3d)
+      )
+    )
+  }
+
+  scene_spec$scene$title <- normalize_scene_title(list(
+    main = main,
+    sub = sub,
+    xlab = xlab,
+    ylab = ylab,
+    zlab = zlab,
+    color = color,
+    cex = cex
+  ))
+
+  .babylon_state$current_scene <- scene_spec
+  babylon(scene_spec$objects, scene = scene_spec$scene)
+}
+
 #' Render one or more clipping-style planes
 #'
 #' Planes are specified by coefficients `(a, b, c, d)` for equations of the
 #' form `a*x + b*y + c*z + d = 0`.
 #'
 #' @param ... Plane coefficients. Supply either four numeric vectors
-#'   `a, b, c, d` of equal length or a matrix/data frame with four columns.
+#'   `a, b, c, d` of equal length, a matrix/data frame with four columns, or a
+#'   `3 x 3` matrix of points used to fit a single plane.
 #' @param color Plane color.
 #' @param alpha Plane opacity.
 #' @param size Plane sheet size in world units. If `NULL`, Babylonian uses a

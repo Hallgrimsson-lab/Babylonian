@@ -24,7 +24,7 @@ library(Babylonian)
 
 babylon(
   data = list(
-    list(type = "sphere", diameter = 1),
+    list(type = "sphere", diameter = 1)
   )
 )
 ```
@@ -35,15 +35,16 @@ Babylonian also interfaces with `mesh3d` objects, so you can use `plot3d()` like
 library(Babylonian)
 library(Morpho)
 
-mesh <- file2mesh("my_mesh.obj")
-
+mesh <- file2mesh(file = system.file("extdata", "person1.obj", package = "Babylonian"))
 plot3d(mesh, color = "#2563eb", alpha = 0.95, axes = TRUE, nticks = 4)
+
 ```
 
 Babylonian keeps a lightweight `par3d()`-style view state so camera settings can persist across new scenes:
 
 ``` r
 par3d(
+  windowRect = c(0, 0, 800, 800),
   zoom = 1.4,
   userMatrix = diag(4),
   bg = "white"
@@ -51,6 +52,7 @@ par3d(
 
 bg3d("black")
 plot3d(mesh)
+
 ```
 
 Babylonian also supports inline rendering of scenes in R/Quarto notebooks. Just plot like you normally would.
@@ -62,7 +64,7 @@ Babylonian also supports inline rendering of scenes in R/Quarto notebooks. Just 
 Points and spheres:
 
 ``` r
-pts <- matrix(rnorm(60), ncol = 3)
+pts <- matrix(rnorm(60), ncol = 3) * 100
 
 plot3d(mesh, add = FALSE, color = "gray70")
 points3d(pts, color = "tomato", size = 0.03)
@@ -182,7 +184,7 @@ crouzon_intercept <- file2mesh(file = system.file("extdata", "Crouzon Syndrome_i
 crouzon_age <- file2mesh(file = system.file("extdata", "Crouzon Syndrome_age.ply", package = "Babylonian"))
 
 bg3d("black")
-meshDist(crouzon_intercept, crouzon_age, alpha = 0, displace = TRUE, backface_culling = F)
+meshDist(crouzon_intercept, crouzon_age, alpha = 0, displace = TRUE, backface_culling = F, axes = F)
 
 ```
 
@@ -208,7 +210,7 @@ We offer a quick utility for creating morph targets for interactive inspection w
 ``` r
 
 # see the midpoint between mesh and mesh2
-morphed_mesh <- morph_target3d(mesh, mesh2, influence = 0.5, name = "morph1")
+morphed_mesh <- morph_target3d(mesh, mesh2, influence = 0.5, name = "morph10")
 plot3d(morphed_mesh)
 
 ```
@@ -246,6 +248,7 @@ snapshot3d("scene.png")
 We offer several utilities for easy figure making and screenshotting (to .png & .tif). `create_pose3d()` is a lightweight widget to orient and frame a mesh. It returns the posed settings that can be passed along to `par3d()` for consistent figure making:
 
 ``` r
+
 pose <- create_pose_3d(mesh)
 par3d(zoom = pose$zoom, userMatrix = pose$userMatrix, bg = pose$bg)
 plot3d(mesh)
@@ -264,7 +267,7 @@ snapshot3d("edited-scene.png", widget = scene)
 # set scene on first mesh and use the state across multiple meshes
 my_mesh_list <- list(mesh, mesh2)
 for(i in 1:2){
-  scene <- apply_scene_state(plot3d(my_mesh_list[i]), state = state) # how to create a meshlist??
+  scene <- apply_scene_state(plot3d(my_mesh_list[[i]]), state = state) # how to create a meshlist??
   snapshot3d(paste0("edited-scene", i, ".png"), widget = scene)
 }
 

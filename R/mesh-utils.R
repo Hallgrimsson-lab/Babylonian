@@ -955,8 +955,11 @@ plane_coefficients <- function(...) {
       x <- as.matrix(x)
     }
     if (is.matrix(x)) {
+      if (ncol(x) == 3L && nrow(x) == 3L) {
+        return(matrix(plane_coefficients_from_points(x), nrow = 1L))
+      }
       if (ncol(x) != 4L) {
-        stop("Plane coefficient matrices must have exactly four columns.", call. = FALSE)
+        stop("Plane inputs must be either a 3 x 3 point matrix or a matrix with exactly four coefficient columns.", call. = FALSE)
       }
       storage.mode(x) <- "numeric"
       return(x)
@@ -984,6 +987,21 @@ plane_coefficients <- function(...) {
   }
 
   coeffs
+}
+
+plane_coefficients_from_points <- function(x) {
+  points <- validate_xyz_matrix(x)
+  p1 <- points[1, ]
+  p2 <- points[2, ]
+  p3 <- points[3, ]
+  normal <- cross_product3d(p2 - p1, p3 - p1)
+
+  if (!all(is.finite(normal)) || sqrt(sum(normal ^ 2)) <= 1e-12) {
+    stop("The supplied points must span a non-degenerate plane.", call. = FALSE)
+  }
+
+  d <- -sum(normal * p1)
+  c(normal, d)
 }
 
 mesh3d_vertices <- function(x) {

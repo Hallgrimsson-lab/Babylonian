@@ -106,6 +106,7 @@ HTMLWidgets.widget({
     el.appendChild(labelLayer);
     var sceneDecorations = [];
     var axisLabelState = [];
+    var sceneTitleState = [];
     var currentSceneOptions = null;
     var currentSceneBounds = null;
     var baseCameraState = null;
@@ -636,18 +637,24 @@ HTMLWidgets.widget({
       if (spec.alpha !== undefined) {
         material.alpha = spec.alpha;
         if (spec.alpha < 1) {
-          material.needDepthPrePass = true;
-          material.separateCullingPass = true;
+          material.needDepthPrePass = false;
+          material.separateCullingPass = false;
+          if (material.forceDepthWrite !== undefined) {
+            material.forceDepthWrite = false;
+          }
           if (material instanceof BABYLON.ShaderMaterial) {
             material.needAlphaBlending = function() {
               return true;
             };
             material.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
-            material.forceDepthWrite = false;
           }
         }
-        if (material instanceof BABYLON.ShaderMaterial && spec.alpha >= 1) {
-          material.forceDepthWrite = true;
+        if (spec.alpha >= 1) {
+          material.needDepthPrePass = false;
+          material.separateCullingPass = false;
+          if (material.forceDepthWrite !== undefined) {
+            material.forceDepthWrite = true;
+          }
         }
       }
 
@@ -3010,6 +3017,14 @@ HTMLWidgets.widget({
               "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='scale-bar-enabled' type='checkbox' /> Scale bar</label>" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>Scale bar length</label>" +
               "<input data-role='scale-bar-length' type='number' min='0' step='any' value='1' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;' />" +
+              "<label style='display:block; margin-bottom:4px; color:#334155;'>Scale bar unit</label>" +
+              "<select data-role='scale-bar-unit' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
+                "<option value='mm'>mm</option>" +
+                "<option value='cm'>cm</option>" +
+                "<option value='procrustes distance'>procrustes distance</option>" +
+                "<option value='other'>other</option>" +
+              "</select>" +
+              "<input data-role='scale-bar-unit-other' type='text' placeholder='Enter custom unit' style='display:none; width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;' />" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>Filename</label>" +
               "<input data-role='snapshot-filename' type='text' value='scene.png' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;' />" +
               "<label style='display:block; margin-bottom:4px; color:#334155;'>Format</label>" +
@@ -3213,6 +3228,8 @@ HTMLWidgets.widget({
           shadowDarknessSlider: uiLayer.querySelector("[data-role='shadow-darkness-slider']"),
           scaleBarEnabledInput: uiLayer.querySelector("[data-role='scale-bar-enabled']"),
           scaleBarLengthInput: uiLayer.querySelector("[data-role='scale-bar-length']"),
+          scaleBarUnitSelect: uiLayer.querySelector("[data-role='scale-bar-unit']"),
+          scaleBarUnitOtherInput: uiLayer.querySelector("[data-role='scale-bar-unit-other']"),
           snapshotFilenameInput: uiLayer.querySelector("[data-role='snapshot-filename']"),
           snapshotFormatSelect: uiLayer.querySelector("[data-role='snapshot-format']"),
           snapshotSaveButton: uiLayer.querySelector("[data-role='snapshot-save']"),
@@ -3526,12 +3543,17 @@ HTMLWidgets.widget({
         function updateScaleBarFromInputs() {
           var enabled = !!state.ui.scaleBarEnabledInput.checked;
           var length = Number(state.ui.scaleBarLengthInput.value);
+          var unit = (state.ui.scaleBarUnitSelect.value || "mm").toLowerCase();
+          var customUnit = state.ui.scaleBarUnitOtherInput.value ? String(state.ui.scaleBarUnitOtherInput.value).trim() : "";
+          state.ui.scaleBarUnitOtherInput.style.display = unit === "other" ? "block" : "none";
           if (!enabled) {
             state.scaleBar = {enabled: false};
           } else if (isFinite(length) && length > 0) {
             state.scaleBar = {
               enabled: true,
-              length: length
+              length: length,
+              units: unit,
+              custom_units: unit === "other" ? customUnit : null
             };
           } else {
             return;
@@ -3543,6 +3565,8 @@ HTMLWidgets.widget({
 
         state.ui.scaleBarEnabledInput.addEventListener("change", updateScaleBarFromInputs);
         state.ui.scaleBarLengthInput.addEventListener("input", updateScaleBarFromInputs);
+        state.ui.scaleBarUnitSelect.addEventListener("change", updateScaleBarFromInputs);
+        state.ui.scaleBarUnitOtherInput.addEventListener("input", updateScaleBarFromInputs);
 
         function updateClippingFromInputs() {
           var enabled = !!state.ui.clippingEnabledInput.checked;
@@ -3807,6 +3831,11 @@ HTMLWidgets.widget({
       state.ui.scaleBarEnabledInput.checked = scaleBarSpec.enabled === true;
       state.ui.scaleBarLengthInput.disabled = scaleBarSpec.enabled !== true;
       state.ui.scaleBarLengthInput.value = scaleBarSpec.length !== undefined ? String(Number(scaleBarSpec.length)) : "1";
+      state.ui.scaleBarUnitSelect.disabled = scaleBarSpec.enabled !== true;
+      state.ui.scaleBarUnitSelect.value = scaleBarSpec.units || "mm";
+      state.ui.scaleBarUnitOtherInput.disabled = scaleBarSpec.enabled !== true || state.ui.scaleBarUnitSelect.value !== "other";
+      state.ui.scaleBarUnitOtherInput.style.display = state.ui.scaleBarUnitSelect.value === "other" ? "block" : "none";
+      state.ui.scaleBarUnitOtherInput.value = scaleBarSpec.custom_units || "";
 
       var activeMeshTarget = selectedMeshTarget(state);
       state.ui.clippingMaterialSelect.innerHTML = "";
@@ -4701,6 +4730,7 @@ HTMLWidgets.widget({
       });
       sceneDecorations = [];
       axisLabelState = [];
+      sceneTitleState = [];
       labelLayer.innerHTML = "";
     }
 
@@ -4759,6 +4789,21 @@ HTMLWidgets.widget({
       ));
       lineSystem.isPickable = false;
       return lineSystem;
+    }
+
+    function createPolyline(primitive, name) {
+      var points = primitive.points.map(function(coords) {
+        return new BABYLON.Vector3(coords[0], coords[1], coords[2]);
+      });
+      var line = registerNode(BABYLON.MeshBuilder.CreateLines(
+        name,
+        {points: points, updatable: false},
+        scene
+      ));
+      line.color = coerceColor3(primitive.color, BABYLON.Color3.FromHexString("#111111"));
+      line.alpha = primitive.alpha === undefined ? 1 : Number(primitive.alpha);
+      line.isPickable = false;
+      return line;
     }
 
     function registerEditableTarget(targets, primitive, index, node, kind, label, extras) {
@@ -5190,6 +5235,91 @@ HTMLWidgets.widget({
       });
     }
 
+    function addProjectedTextLabel(text, point, color, fontSizePx) {
+      var label = document.createElement("div");
+      label.textContent = text;
+      label.style.position = "absolute";
+      label.style.fontFamily = "Menlo, Monaco, Consolas, monospace";
+      label.style.fontSize = (fontSizePx || 12) + "px";
+      label.style.color = color;
+      label.style.whiteSpace = "nowrap";
+      label.style.textShadow = "0 1px 0 rgba(255,255,255,0.8)";
+      label.style.transform = "translate(-50%, -50%)";
+      labelLayer.appendChild(label);
+      axisLabelState.push({
+        element: label,
+        point: point.clone()
+      });
+    }
+
+    function renderTextPrimitives(objects) {
+      (objects || []).forEach(function(primitive) {
+        if (!primitive || primitive.type !== "text3d" || !primitive.points || !primitive.texts) {
+          return;
+        }
+
+        var color = primitive.color || "#111111";
+        var fontSize = Math.max(10, Math.round(12 * Number(primitive.cex || 1)));
+        primitive.points.forEach(function(coords, pointIndex) {
+          var text = primitive.texts[pointIndex];
+          if (text === undefined || text === null) {
+            return;
+          }
+          addProjectedTextLabel(
+            String(text),
+            new BABYLON.Vector3(coords[0], coords[1], coords[2]),
+            color,
+            fontSize
+          );
+        });
+      });
+    }
+
+    function renderSceneTitle(sceneOptions) {
+      sceneTitleState = [];
+
+      if (!sceneOptions || !sceneOptions.title) {
+        return;
+      }
+
+      var titleSpec = sceneOptions.title;
+      var color = titleSpec.color || "#0f172a";
+      var cex = Number(titleSpec.cex || 1);
+
+      if (titleSpec.main) {
+        var main = document.createElement("div");
+        main.textContent = String(titleSpec.main);
+        main.style.position = "absolute";
+        main.style.top = "12px";
+        main.style.left = "50%";
+        main.style.transform = "translateX(-50%)";
+        main.style.fontFamily = "Menlo, Monaco, Consolas, monospace";
+        main.style.fontWeight = "700";
+        main.style.fontSize = Math.max(14, Math.round(18 * cex)) + "px";
+        main.style.color = color;
+        main.style.textShadow = "0 1px 0 rgba(255,255,255,0.8)";
+        main.style.pointerEvents = "none";
+        labelLayer.appendChild(main);
+        sceneTitleState.push(main);
+      }
+
+      if (titleSpec.sub) {
+        var sub = document.createElement("div");
+        sub.textContent = String(titleSpec.sub);
+        sub.style.position = "absolute";
+        sub.style.top = titleSpec.main ? "34px" : "12px";
+        sub.style.left = "50%";
+        sub.style.transform = "translateX(-50%)";
+        sub.style.fontFamily = "Menlo, Monaco, Consolas, monospace";
+        sub.style.fontSize = Math.max(11, Math.round(12 * cex)) + "px";
+        sub.style.color = color;
+        sub.style.textShadow = "0 1px 0 rgba(255,255,255,0.8)";
+        sub.style.pointerEvents = "none";
+        labelLayer.appendChild(sub);
+        sceneTitleState.push(sub);
+      }
+    }
+
     function updateAxisLabels() {
       axisLabelState.forEach(function(item) {
         var projected = BABYLON.Vector3.Project(
@@ -5239,7 +5369,9 @@ HTMLWidgets.widget({
         return;
       }
 
-      var label = sceneOptions.scale_bar.label || formatRNumber(length);
+      var units = sceneOptions.scale_bar.units || null;
+      var unitLabel = units === "other" ? (sceneOptions.scale_bar.custom_units || "") : (units || "");
+      var label = sceneOptions.scale_bar.label || (formatRNumber(length) + (unitLabel ? " " + unitLabel : ""));
       var width = Math.max(1, Math.round(pixelLength));
       scaleBarLayer.style.display = "block";
       scaleBarLayer.innerHTML =
@@ -5283,9 +5415,9 @@ HTMLWidgets.widget({
         new BABYLON.Vector3(min.x, min.y, max.z)
       ], zColor, "axis-z");
 
-      addAxisLabel("x", new BABYLON.Vector3(max.x, min.y, min.z), "#b91c1c");
-      addAxisLabel("y", new BABYLON.Vector3(min.x, max.y, min.z), "#047857");
-      addAxisLabel("z", new BABYLON.Vector3(min.x, min.y, max.z), "#1d4ed8");
+      addAxisLabel((sceneOptions.title && sceneOptions.title.xlab) || "x", new BABYLON.Vector3(max.x, min.y, min.z), "#b91c1c");
+      addAxisLabel((sceneOptions.title && sceneOptions.title.ylab) || "y", new BABYLON.Vector3(min.x, max.y, min.z), "#047857");
+      addAxisLabel((sceneOptions.title && sceneOptions.title.zlab) || "z", new BABYLON.Vector3(min.x, min.y, max.z), "#1d4ed8");
 
       var boxCorners = [
         new BABYLON.Vector3(min.x, min.y, min.z),
@@ -5389,6 +5521,8 @@ HTMLWidgets.widget({
             frameScene();
             applyViewOptions(currentSceneBounds, currentSceneOptions);
             renderAxes(currentSceneBounds, currentSceneOptions);
+            renderTextPrimitives(objects);
+            renderSceneTitle(currentSceneOptions);
             if (activeInteractionState && activeInteractionState.mode === "edit_scene3d") {
               syncEditorGizmoState(activeInteractionState);
               updateSceneEditorPanel(activeInteractionState, buildSceneEditorPayload(activeInteractionState));
@@ -5500,6 +5634,9 @@ HTMLWidgets.widget({
           } else if (primitive.type === "segments3d") {
             createSegmentLines(primitive, name);
             scheduleFrame();
+          } else if (primitive.type === "lines3d") {
+            createPolyline(primitive, name);
+            scheduleFrame();
           } else if (primitive.type === "spheres3d") {
             var sphereRadius = primitive.radius || 0.03;
             var sphereBoundsRadius = pointCloudRadius(primitive.points);
@@ -5523,6 +5660,8 @@ HTMLWidgets.widget({
             primitive.coefficients.forEach(function(coeffs, idx) {
               createPlaneMesh(coeffs, primitive, name + "-plane-" + idx);
             });
+            scheduleFrame();
+          } else if (primitive.type === "text3d") {
             scheduleFrame();
           } else if (primitive.type === "mesh" || primitive.type === "asset3d") {
             pendingImports += 1;

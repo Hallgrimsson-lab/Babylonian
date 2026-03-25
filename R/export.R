@@ -7,13 +7,19 @@
 #' @param filename Output image path.
 #' @param widget Optional Babylonian htmlwidget. If omitted, the current scene
 #'   from the `plot3d()` accumulator is rendered.
-#' @param vwidth Viewport width passed to [webshot2::webshot()].
-#' @param vheight Viewport height passed to [webshot2::webshot()].
+#' @param vwidth Viewport width passed to [webshot2::webshot()]. When `NULL`,
+#'   Babylonian uses the current `par3d(windowRect=...)` width.
+#' @param vheight Viewport height passed to [webshot2::webshot()]. When `NULL`,
+#'   Babylonian uses the current `par3d(windowRect=...)` height.
 #' @param delay Delay (seconds) before the screenshot is taken.
 #' @param ... Additional arguments forwarded to [webshot2::webshot()].
 #'
 #' @export
-snapshot3d <- function(filename = "snapshot3d.png", widget = NULL, vwidth = 800, vheight = 800, delay = 0.5, ...) {
+snapshot3d <- function(filename = "snapshot3d.png", widget = NULL, vwidth = NULL, vheight = NULL, delay = 0.5, ...) {
+  dimensions <- resolve_widget_dimensions(width = vwidth, height = vheight)
+  vwidth <- dimensions$width
+  vheight <- dimensions$height
+
   if (is.null(widget)) {
     scene_spec <- current_scene_spec()
     if (is.null(scene_spec)) {

@@ -23,6 +23,9 @@ babylon <- function(
   height = NULL,
   elementId = NULL
 ) {
+  dimensions <- resolve_widget_dimensions(width = width, height = height)
+  width <- dimensions$width
+  height <- dimensions$height
   data <- lapply(data, normalize_scene_object)
   interaction <- normalize_interaction(interaction)
   scene <- normalize_scene(scene)
@@ -177,6 +180,10 @@ normalize_scene <- function(x) {
     x$postprocess <- normalize_scene_postprocesses(x$postprocess)
   }
 
+  if (!is.null(x$title)) {
+    x$title <- normalize_scene_title(x$title)
+  }
+
   if (!is.null(x$scale_bar)) {
     x$scale_bar <- normalize_scene_scale_bar(x$scale_bar)
   }
@@ -188,6 +195,33 @@ normalize_scene <- function(x) {
   x$materials <- normalize_scene_material_library(x$materials %||% NULL)
 
   x
+}
+
+normalize_scene_title <- function(x) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+
+  if (is.character(x) && length(x)) {
+    x <- list(main = x[[1]])
+  }
+
+  if (!is.list(x)) {
+    stop("`scene$title` must be `NULL`, a string, or a list.", call. = FALSE)
+  }
+
+  out <- list()
+  for (nm in c("main", "sub", "xlab", "ylab", "zlab", "color")) {
+    if (!is.null(x[[nm]])) {
+      out[[nm]] <- as.character(x[[nm]][[1]])
+    }
+  }
+
+  if (!is.null(x$cex)) {
+    out$cex <- as.numeric(x$cex[[1]])
+  }
+
+  out
 }
 
 normalize_scene_scale_bar <- function(x) {
@@ -216,6 +250,25 @@ normalize_scene_scale_bar <- function(x) {
 
   if (!is.null(x$label)) {
     out$label <- as.character(x$label[[1]])
+  }
+
+  if (!is.null(x$units)) {
+    units <- as.character(x$units[[1]])
+    allowed_units <- c("mm", "cm", "procrustes distance", "other")
+    if (!nzchar(units) || !(tolower(units) %in% allowed_units)) {
+      stop("`scale_bar$units` must be one of `mm`, `cm`, `procrustes distance`, or `other`.", call. = FALSE)
+    }
+    out$units <- tolower(units)
+  }
+
+  if (!is.null(x$custom_units)) {
+    custom_units <- as.character(x$custom_units[[1]])
+    if (!nzchar(custom_units)) {
+      custom_units <- NULL
+    }
+    if (!is.null(custom_units)) {
+      out$custom_units <- custom_units
+    }
   }
 
   out
@@ -292,20 +345,26 @@ append_scene_objects <- function(objects, add = TRUE, axes = TRUE, nticks = 5) {
 #' Get or set Babylonian view parameters
 #'
 #' This stores lightweight `par3d()`-style view settings that new Babylonian
-#' scenes will use, including `zoom`, `userMatrix`, and background color.
+#' scenes will use, including `zoom`, `userMatrix`, background color, and an
+#' optional `windowRect` sizing hint.
 #'
 #' @param zoom Optional zoom multiplier.
 #' @param userMatrix Optional 4 x 4 user matrix used to rotate the scene pose.
 #' @param bg Optional background color for the scene canvas.
+#' @param windowRect Optional numeric vector of length 4, interpreted like
+#'   `rgl::par3d(windowRect = c(x1, y1, x2, y2))`. Babylonian ignores the
+#'   screen position and uses only the implied width (`x2 - x1`) and height
+#'   (`y2 - y1`) as defaults for new scene widgets and snapshots.
 #' @param reset Whether to restore the default view state.
 #'
 #' @export
-par3d <- function(zoom = NULL, userMatrix = NULL, bg = NULL, reset = FALSE) {
+par3d <- function(zoom = NULL, userMatrix = NULL, bg = NULL, windowRect = NULL, reset = FALSE) {
   if (isTRUE(reset)) {
     .babylon_state$par3d <- list(
       zoom = 0.05,
       userMatrix = diag(4),
-      bg = "#FAFAFA"
+      bg = "#FAFAFA",
+      windowRect = c(0, 0, 800, 800)
     )
   }
 
@@ -319,6 +378,10 @@ par3d <- function(zoom = NULL, userMatrix = NULL, bg = NULL, reset = FALSE) {
 
   if (!is.null(bg)) {
     .babylon_state$par3d$bg <- normalize_babylon_color(bg)
+  }
+
+  if (!is.null(windowRect)) {
+    .babylon_state$par3d$windowRect <- normalize_window_rect(windowRect)
   }
 
   .babylon_state$last_scene_par3d <- .babylon_state$par3d
@@ -380,10 +443,16 @@ normalize_view <- function(x) {
     bg <- normalize_babylon_color(bg)
   }
 
+  window_rect <- x$windowRect
+  if (is.null(window_rect)) {
+    window_rect <- .babylon_state$par3d$windowRect
+  }
+
   view <- serialize_par3d(list(
     zoom = zoom,
     userMatrix = user_matrix,
-    bg = bg
+    bg = bg,
+    windowRect = window_rect
   ))
 
   if (!is.null(x$camera)) {
@@ -398,7 +467,8 @@ serialize_par3d <- function(x) {
   list(
     zoom = as.numeric(x$zoom[[1]]),
     userMatrix = unname(split(mat, row(mat))),
-    bg = normalize_babylon_color(x$bg %||% .babylon_state$par3d$bg)
+    bg = normalize_babylon_color(x$bg %||% .babylon_state$par3d$bg),
+    windowRect = unname(as.numeric(normalize_window_rect(x$windowRect %||% .babylon_state$par3d$windowRect)))
   )
 }
 
@@ -410,7 +480,35 @@ deserialize_par3d <- function(x) {
   list(
     zoom = as.numeric(x$zoom[[1]]),
     userMatrix = normalize_user_matrix(x$userMatrix),
-    bg = normalize_babylon_color(x$bg %||% .babylon_state$par3d$bg)
+    bg = normalize_babylon_color(x$bg %||% .babylon_state$par3d$bg),
+    windowRect = normalize_window_rect(x$windowRect %||% .babylon_state$par3d$windowRect)
+  )
+}
+
+normalize_window_rect <- function(x) {
+  x <- as.numeric(x)
+  if (length(x) != 4L || any(!is.finite(x))) {
+    stop("`windowRect` must be a finite numeric vector of length 4.", call. = FALSE)
+  }
+  if ((x[[3]] - x[[1]]) <= 0 || (x[[4]] - x[[2]]) <= 0) {
+    stop("`windowRect` must imply a positive width and height.", call. = FALSE)
+  }
+  unname(x)
+}
+
+window_rect_dimensions <- function(x) {
+  rect <- normalize_window_rect(x)
+  list(
+    width = as.integer(round(rect[[3]] - rect[[1]])),
+    height = as.integer(round(rect[[4]] - rect[[2]]))
+  )
+}
+
+resolve_widget_dimensions <- function(width = NULL, height = NULL) {
+  defaults <- window_rect_dimensions(.babylon_state$par3d$windowRect)
+  list(
+    width = width %||% defaults$width,
+    height = height %||% defaults$height
   )
 }
 
