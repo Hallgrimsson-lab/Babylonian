@@ -46,6 +46,26 @@ testthat::test_that("babylon normalizes scene post-process descriptors", {
   testthat::expect_identical(widget$x$scene$postprocess[[1]]$blur_level, "medium")
 })
 
+testthat::test_that("scene3d builds a first-class scene spec that babylon renders", {
+  scene <- scene3d(
+    objects = list(
+      as_babylon_points(matrix(c(0, 0, 0), ncol = 3))
+    ),
+    scene = list(
+      axes = FALSE,
+      title = list(main = "Scene Spec")
+    )
+  )
+
+  testthat::expect_s3_class(scene, "babylon_scene")
+
+  widget <- babylon(scene)
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_false(widget$x$scene$axes)
+  testthat::expect_identical(widget$x$scene$title$main, "Scene Spec")
+})
+
 testthat::test_that("par3d windowRect sets default widget sizing", {
   previous_par3d <- .babylon_state$par3d
   previous_last_scene <- .babylon_state$last_scene_par3d
@@ -101,6 +121,20 @@ testthat::test_that("scene editor removals persist when scene state is reapplied
   updated <- apply_scene_state(widget, state = state)
 
   testthat::expect_false(any(vapply(updated$x$objects, function(object) identical(object$name %||% NULL, "key_light"), logical(1))))
+})
+
+testthat::test_that("scene editor state round-trips mesh bounding box visibility", {
+  widget <- babylon(
+    data = list(
+      as_babylon_mesh(make_test_mesh3d(rbind(c(0, 0, 0), c(1, 0, 0), c(0, 1, 0))))
+    )
+  )
+
+  state <- scene_state_from_widget(widget)
+  state$objects[[1]]$show_bounding_box <- TRUE
+  updated <- apply_scene_state(widget, state = state)
+
+  testthat::expect_true(isTRUE(updated$x$objects[[1]]$show_bounding_box))
 })
 
 testthat::test_that("lighting_preset3d adds named preset rigs", {

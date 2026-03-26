@@ -15,10 +15,23 @@ pip install shiny
 
 ```python
 import trimesh
-from babylonian import plot3d
+from babylonian import Scene, as_babylon_mesh, plot3d
 
 mesh = trimesh.load("specimen.obj", force="mesh")
 plot3d(mesh, color="#d97706")
+
+scene = Scene()
+scene.add(as_babylon_mesh(mesh, color="#d97706"))
+scene.show()
+
+scene = (
+    Scene()
+    .add_mesh(mesh, color="#d97706")
+    .add_light(type="point", position=[1, 2, 3], intensity=0.8)
+    .with_title("Specimen")
+    .with_scale_bar(10, units="mm")
+)
+scene.show()
 ```
 
 `plot3d()` returns a notebook-friendly widget object with `_repr_html_()`, so it renders inline in Jupyter.
@@ -71,6 +84,7 @@ This is a first transport-oriented port:
 
 ## Current Scope
 
+- `Scene`
 - `scene3d()`
 - `plot3d()`
 - `shade3d()`
@@ -78,6 +92,18 @@ This is a first transport-oriented port:
 - `light3d()`
 - `as_babylon_mesh()`
 - `render_scene3d()`
+
+`Scene` is now the primary Python entry point. The most useful first-pass methods are:
+
+- `add()`
+- `add_mesh()`
+- `add_light()`
+- `with_axes()`
+- `with_view()`
+- `with_title()`
+- `with_scale_bar()`
+- `show()`
+- `save_html()`
 
 The first in-memory mesh adapter assumes `trimesh.Trimesh`. Raw `(vertices, faces)` inputs are also supported.
 

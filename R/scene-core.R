@@ -2,12 +2,17 @@
 #'
 #' This function creates a new BabylonJS scene.
 #'
-#' @param data A list of scene objects to be passed to the widget. Entries can
-#'   be Babylonian primitive specifications, file-backed meshes created with
-#'   [import_mesh()], or `mesh3d` objects such as those returned by Morpho.
+#' @param data A list of scene objects to be passed to the widget, or a
+#'   `babylon_scene` object created by [scene3d()]. Entries can be Babylonian
+#'   primitive specifications, file-backed meshes created with [import_mesh()],
+#'   or `mesh3d` objects such as those returned by Morpho.
 #' @param interaction Optional interaction settings used by bespoke tools such
 #'   as landmark digitizing.
 #' @param scene Optional scene decorations and display settings.
+#' @param sync_group Optional shared synchronization group for multi-scene
+#'   layouts.
+#' @param sync_camera Whether camera updates should be shared within the sync
+#'   group.
 #' @param width The width of the widget.
 #' @param height The height of the widget.
 #' @param elementId The ID of the HTML element to contain the widget.
@@ -23,6 +28,12 @@ babylon <- function(
   height = NULL,
   elementId = NULL
 ) {
+  if (inherits(data, "babylon_scene")) {
+    interaction <- interaction %||% data$interaction %||% NULL
+    scene <- modifyList(data$scene %||% list(), scene %||% list())
+    data <- data$objects %||% list()
+  }
+
   dimensions <- resolve_widget_dimensions(width = width, height = height)
   width <- dimensions$width
   height <- dimensions$height
@@ -57,6 +68,28 @@ babylon <- function(
     package = "Babylonian",
     elementId = elementId,
     dependencies = dependencies
+  )
+}
+
+#' Create a Babylonian scene specification
+#'
+#' This constructs a first-class scene object that can be rendered later with
+#' [babylon()] or passed around between helpers. It is the language-neutral
+#' scene model that Babylonian uses under the hood.
+#'
+#' @param objects Optional list of scene objects.
+#' @param scene Optional scene decorations and display settings.
+#' @param interaction Optional interaction settings for bespoke tools.
+#'
+#' @export
+scene3d <- function(objects = list(), scene = NULL, interaction = NULL) {
+  structure(
+    list(
+      objects = lapply(objects %||% list(), normalize_scene_object),
+      scene = normalize_scene(scene),
+      interaction = normalize_interaction(interaction)
+    ),
+    class = c("babylon_scene", "list")
   )
 }
 
@@ -338,7 +371,7 @@ append_scene_objects <- function(objects, add = TRUE, axes = TRUE, nticks = 5) {
   scene_spec <- current_scene_spec()
 
   if (!isTRUE(add) || is.null(scene_spec)) {
-    scene_spec <- list(
+    scene_spec <- scene3d(
       objects = list(),
       scene = list(
         axes = isTRUE(axes),
@@ -346,6 +379,8 @@ append_scene_objects <- function(objects, add = TRUE, axes = TRUE, nticks = 5) {
         view = serialize_par3d(.babylon_state$par3d)
       )
     )
+  } else if (!inherits(scene_spec, "babylon_scene")) {
+    scene_spec <- structure(scene_spec, class = c("babylon_scene", "list"))
   } else {
     if (!missing(axes)) {
       scene_spec$scene$axes <- isTRUE(axes)
@@ -360,7 +395,7 @@ append_scene_objects <- function(objects, add = TRUE, axes = TRUE, nticks = 5) {
   }
   .babylon_state$current_scene <- scene_spec
 
-  babylon(scene_spec$objects, scene = scene_spec$scene)
+  babylon(scene_spec)
 }
 
 #' Get or set Babylonian view parameters

@@ -1,5 +1,6 @@
 from .core import (
     BabylonScene,
+    Scene,
     as_babylon_mesh,
     clear_scene3d,
     light3d,
@@ -12,6 +13,7 @@ from .core import (
 
 __all__ = [
     "BabylonScene",
+    "Scene",
     "as_babylon_mesh",
     "clear_scene3d",
     "light3d",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from .core import BabylonHTMLWidget, BabylonScene, _scene_from_object
+from .core import BabylonHTMLWidget, Scene, _scene_from_object
 
 
 def _require_shiny():
@@ -24,8 +24,8 @@ def _coerce_scene(
     axes: bool,
     nticks: int,
     add: bool,
-) -> BabylonScene:
-    if isinstance(x, BabylonScene):
+) -> Scene:
+    if isinstance(x, Scene):
         return x.clone()
     return _scene_from_object(
         x,

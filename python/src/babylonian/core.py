@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover - fallback when notebook deps are absent
 
 SCHEMA_NAME = "babylonian.scene"
 SCHEMA_VERSION = "0.1.0"
-_CURRENT_SCENE: Optional["BabylonScene"] = None
+_CURRENT_SCENE: Optional["Scene"] = None
 
 
 def _is_trimesh(obj: Any) -> bool:
@@ -103,6 +103,71 @@ def _normalize_color(value: Optional[str], fallback: Optional[str] = None) -> Op
     return value
 
 
+def _normalize_vector3(value: Sequence[float], *, name: str) -> list[float]:
+    if len(value) != 3:
+        raise ValueError(f"`{name}` must have length 3.")
+    return [float(x) for x in value]
+
+
+def _normalize_matrix4(value: Sequence[Sequence[float]], *, name: str) -> list[list[float]]:
+    rows = [list(row) for row in value]
+    if len(rows) != 4 or any(len(row) != 4 for row in rows):
+        raise ValueError(f"`{name}` must have shape (4, 4).")
+    return [[float(x) for x in row] for row in rows]
+
+
+def _normalize_title_dict(
+    *,
+    main: Optional[str] = None,
+    sub: Optional[str] = None,
+    xlab: Optional[str] = None,
+    ylab: Optional[str] = None,
+    zlab: Optional[str] = None,
+    color: Optional[str] = None,
+    cex: Optional[float] = None,
+) -> dict[str, Any]:
+    title: dict[str, Any] = {}
+    for key, value in {
+        "main": main,
+        "sub": sub,
+        "xlab": xlab,
+        "ylab": ylab,
+        "zlab": zlab,
+        "color": color,
+    }.items():
+        if value is not None:
+            title[key] = str(value)
+    if cex is not None:
+        title["cex"] = float(cex)
+    return title
+
+
+def _normalize_scale_bar_dict(
+    *,
+    length: float,
+    units: str = "mm",
+    custom_units: Optional[str] = None,
+    label: Optional[str] = None,
+    position: str | Sequence[float] = "bottomleft",
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "enabled": True,
+        "length": float(length),
+        "units": str(units),
+    }
+    if units == "other":
+        out["custom_units"] = None if custom_units is None else str(custom_units)
+    if label is not None:
+        out["label"] = str(label)
+    if isinstance(position, str):
+        out["position"] = position
+    else:
+        if len(position) != 2:
+            raise ValueError("`position` must be a corner string or a length-2 numeric sequence.")
+        out["position"] = [float(position[0]), float(position[1])]
+    return out
+
+
 def _default_view() -> dict[str, Any]:
     return {
         "zoom": 0.05,
@@ -117,7 +182,7 @@ def _default_view() -> dict[str, Any]:
 
 
 @dataclass
-class BabylonScene:
+class Scene:
     objects: list[dict[str, Any]] = field(default_factory=list)
     scene: dict[str, Any] = field(default_factory=dict)
     interaction: Optional[dict[str, Any]] = None
@@ -135,17 +200,169 @@ class BabylonScene:
         if self.interaction is not None:
             self.interaction = deepcopy(self.interaction)
 
-    def clone(self) -> "BabylonScene":
-        return BabylonScene(
+    def clone(self) -> "Scene":
+        return Scene(
             objects=deepcopy(self.objects),
             scene=deepcopy(self.scene),
             interaction=deepcopy(self.interaction),
         )
 
-    def append(self, *objects: dict[str, Any]) -> "BabylonScene":
+    def append(self, *objects: dict[str, Any]) -> "Scene":
         scene = self.clone()
         scene.objects.extend(deepcopy(list(objects)))
         return scene
+
+    def add(self, *objects: dict[str, Any]) -> "Scene":
+        self.objects.extend(deepcopy(list(objects)))
+        return self
+
+    def add_mesh(
+        self,
+        x: Any = None,
+        *,
+        vertices: Any = None,
+        faces: Any = None,
+        color: Optional[str] = None,
+        alpha: Optional[float] = None,
+        specularity: Optional[str] = "#000000",
+        name: Optional[str] = None,
+        wireframe: bool = False,
+        reverse_winding: bool = True,
+    ) -> "Scene":
+        return self.add(
+            as_babylon_mesh(
+                x,
+                vertices=vertices,
+                faces=faces,
+                color=color,
+                alpha=alpha,
+                specularity=specularity,
+                name=name,
+                wireframe=wireframe,
+                reverse_winding=reverse_winding,
+            )
+        )
+
+    def add_light(
+        self,
+        *,
+        type: str = "hemispheric",
+        position: Optional[Sequence[float]] = None,
+        direction: Optional[Sequence[float]] = None,
+        intensity: float = 1.0,
+        diffuse: Optional[str] = None,
+        specular: Optional[str] = None,
+        name: Optional[str] = None,
+    ) -> "Scene":
+        return self.add(
+            light3d(
+                type=type,
+                position=position,
+                direction=direction,
+                intensity=intensity,
+                diffuse=diffuse,
+                specular=specular,
+                name=name,
+            )
+        )
+
+    def with_axes(self, axes: bool = True, *, nticks: Optional[int] = None) -> "Scene":
+        self.scene["axes"] = bool(axes)
+        if nticks is not None:
+            self.scene["nticks"] = int(nticks)
+        return self
+
+    def with_view(
+        self,
+        *,
+        zoom: Optional[float] = None,
+        user_matrix: Optional[Sequence[Sequence[float]]] = None,
+        bg: Optional[str] = None,
+        camera: Optional[dict[str, Any]] = None,
+    ) -> "Scene":
+        view = deepcopy(self.scene.get("view", _default_view()))
+        if zoom is not None:
+            view["zoom"] = float(zoom)
+        if user_matrix is not None:
+            view["userMatrix"] = _normalize_matrix4(user_matrix, name="user_matrix")
+        if bg is not None:
+            view["bg"] = _normalize_color(bg)
+        if camera is not None:
+            next_camera = deepcopy(view.get("camera", {}))
+            if "alpha" in camera:
+                next_camera["alpha"] = float(camera["alpha"])
+            if "beta" in camera:
+                next_camera["beta"] = float(camera["beta"])
+            if "radius" in camera:
+                next_camera["radius"] = float(camera["radius"])
+            if "target" in camera:
+                next_camera["target"] = _normalize_vector3(camera["target"], name="camera.target")
+            view["camera"] = next_camera
+        self.scene["view"] = view
+        return self
+
+    def with_title(
+        self,
+        main: Optional[str] = None,
+        *,
+        sub: Optional[str] = None,
+        xlab: Optional[str] = None,
+        ylab: Optional[str] = None,
+        zlab: Optional[str] = None,
+        color: Optional[str] = None,
+        cex: Optional[float] = None,
+    ) -> "Scene":
+        title = deepcopy(self.scene.get("title", {}))
+        title.update(
+            _normalize_title_dict(
+                main=main,
+                sub=sub,
+                xlab=xlab,
+                ylab=ylab,
+                zlab=zlab,
+                color=color,
+                cex=cex,
+            )
+        )
+        self.scene["title"] = title
+        return self
+
+    def with_scale_bar(
+        self,
+        length: float,
+        *,
+        units: str = "mm",
+        custom_units: Optional[str] = None,
+        label: Optional[str] = None,
+        position: str | Sequence[float] = "bottomleft",
+    ) -> "Scene":
+        self.scene["scale_bar"] = _normalize_scale_bar_dict(
+            length=length,
+            units=units,
+            custom_units=custom_units,
+            label=label,
+            position=position,
+        )
+        return self
+
+    def show(
+        self,
+        *,
+        width: int = 900,
+        height: int = 700,
+        renderer: str = "iframe",
+    ) -> "BabylonWidget":
+        return render_scene3d(self, width=width, height=height, renderer=renderer)
+
+    def save_html(
+        self,
+        path: str | Path,
+        *,
+        width: int = 900,
+        height: int = 700,
+    ) -> Path:
+        widget = BabylonHTMLWidget(scene=self, width=width, height=height)
+        return widget.save_html(path)
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -166,7 +383,7 @@ class BabylonScene:
         return json.dumps(self.to_spec(), indent=indent)
 
 
-def _widget_html(scene: BabylonScene, width: int, height: int, element_id: str) -> str:
+def _widget_html(scene: Scene, width: int, height: int, element_id: str) -> str:
     payload = json.dumps(scene.to_payload())
     div_id = f"{element_id}-canvas"
     return f"""
@@ -400,7 +617,7 @@ def _widget_html(scene: BabylonScene, width: int, height: int, element_id: str) 
 """
 
 
-def _standalone_document(scene: BabylonScene, width: int, height: int, element_id: str) -> str:
+def _standalone_document(scene: Scene, width: int, height: int, element_id: str) -> str:
     return (
         "<!doctype html><html><head><meta charset='utf-8'><title>Babylonian</title>"
         "<style>html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; } "
@@ -411,7 +628,7 @@ def _standalone_document(scene: BabylonScene, width: int, height: int, element_i
 
 @dataclass
 class BabylonHTMLWidget:
-    scene: BabylonScene
+    scene: Scene
     width: int = 900
     height: int = 700
     element_id: str = field(default_factory=lambda: f"babylonian-py-{uuid.uuid4().hex}")
@@ -449,7 +666,7 @@ if anywidget is not None and traitlets is not None:  # pragma: no branch
         height = traitlets.Int(700).tag(sync=True)
         element_id = traitlets.Unicode().tag(sync=True)
 
-        def __init__(self, scene: BabylonScene, width: int = 900, height: int = 700) -> None:
+        def __init__(self, scene: Scene, width: int = 900, height: int = 700) -> None:
             super().__init__()
             self.scene_payload = scene.to_payload()
             self.width = int(width)
@@ -457,7 +674,7 @@ if anywidget is not None and traitlets is not None:  # pragma: no branch
             self.element_id = f"babylonian-py-{uuid.uuid4().hex}"
 
         def save_html(self, path: str | Path) -> Path:
-            scene = BabylonScene(
+            scene = Scene(
                 objects=self.scene_payload.get("objects", []),
                 scene=self.scene_payload.get("scene", {}),
                 interaction=self.scene_payload.get("interaction"),
@@ -472,13 +689,16 @@ else:
     BabylonWidget = BabylonHTMLWidget
 
 
+BabylonScene = Scene
+
+
 def scene3d(
     objects: Optional[Iterable[dict[str, Any]]] = None,
     *,
     scene: Optional[dict[str, Any]] = None,
     interaction: Optional[dict[str, Any]] = None,
-) -> BabylonScene:
-    return BabylonScene(objects=list(objects or []), scene=scene or {}, interaction=interaction)
+) -> Scene:
+    return Scene(objects=list(objects or []), scene=scene or {}, interaction=interaction)
 
 
 def clear_scene3d() -> None:
@@ -551,7 +771,7 @@ def light3d(
 
 
 def render_scene3d(
-    scene: BabylonScene,
+    scene: Scene,
     *,
     width: int = 900,
     height: int = 700,
@@ -572,7 +792,7 @@ def _scene_from_object(
     nticks: int,
     add: bool,
     wireframe: bool = False,
-) -> BabylonScene:
+) -> Scene:
     global _CURRENT_SCENE
 
     primitive = as_babylon_mesh(

@@ -518,6 +518,10 @@ HTMLWidgets.widget({
       } else {
         mesh.rotation = new BABYLON.Vector3(0, 0, 0);
       }
+
+      if (mesh.showBoundingBox !== undefined) {
+        mesh.showBoundingBox = primitive.show_bounding_box === true;
+      }
     }
 
     function applyCustomVertexAttributes(mesh, primitive) {
@@ -1101,6 +1105,15 @@ HTMLWidgets.widget({
       });
     }
 
+    function applyImportedBoundingBoxes(meshes, primitive) {
+      var visible = !!(primitive && primitive.show_bounding_box);
+      (meshes || []).forEach(function(mesh) {
+        if (mesh && mesh.showBoundingBox !== undefined) {
+          mesh.showBoundingBox = visible;
+        }
+      });
+    }
+
     function registerImportedAssetTarget(editableTargets, primitive, rootNode, importedMeshes) {
       if (!rootNode) {
         return;
@@ -1138,6 +1151,7 @@ HTMLWidgets.widget({
 
         applyImportedGeometryOverrides(importedMeshes, primitive);
         applyImportedMaterialOverrides(importedMeshes, primitive);
+        applyImportedBoundingBoxes(importedMeshes, primitive);
         if (rootTransformNode) {
           applyTransform(rootTransformNode, primitive);
           registerNode(rootTransformNode);
@@ -2526,6 +2540,19 @@ HTMLWidgets.widget({
       return target.node ? [target.node] : [];
     } 
 
+    function applyBoundingBoxToEditorTarget(target) {
+      if (!target || target.kind !== "mesh") {
+        return;
+      }
+
+      var visible = !!(target.primitive && target.primitive.show_bounding_box);
+      editorTargetNodes(target).forEach(function(node) {
+        if (node && node.showBoundingBox !== undefined) {
+          node.showBoundingBox = visible;
+        }
+      });
+    }
+
     function computeNodesBounds(nodes) {
       if (!nodes || !nodes.length) return null;
     
@@ -2984,6 +3011,9 @@ HTMLWidgets.widget({
           if (target.primitive && target.primitive.material) {
             entry.material = cloneMaterialSpec(target.primitive.material);
           }
+          if (target.primitive && target.primitive.show_bounding_box !== undefined) {
+            entry.show_bounding_box = target.primitive.show_bounding_box === true;
+          }
           if (target.primitive && target.primitive.morph_target) {
             entry.morph_target = normalizeMorphTargetSpecs(target.primitive).map(function(spec) {
               return {
@@ -3128,6 +3158,7 @@ HTMLWidgets.widget({
                 "<input data-role='material-roughness' type='range' min='0' max='1' step='0.01' value='1' style='width:100%; margin-bottom:8px;' />" +
               "</div>" +
               "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='material-wireframe' type='checkbox' /> Wireframe</label>" +
+              "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='mesh-bounding-box' type='checkbox' /> Bounding box</label>" +
               "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='material-backface' type='checkbox' checked /> Backface culling</label>" +
             "</div>" +
           "</details>" +
@@ -3209,6 +3240,7 @@ HTMLWidgets.widget({
           materialRoughnessSlider: uiLayer.querySelector("[data-role='material-roughness']"),
           materialRoughnessValue: uiLayer.querySelector("[data-role='material-roughness-value']"),
           materialWireframeInput: uiLayer.querySelector("[data-role='material-wireframe']"),
+          meshBoundingBoxInput: uiLayer.querySelector("[data-role='mesh-bounding-box']"),
           materialBackfaceInput: uiLayer.querySelector("[data-role='material-backface']"),
           lightSelect: uiLayer.querySelector("[data-role='light-target']"),
           lightPresetSelect: uiLayer.querySelector("[data-role='light-preset']"),
@@ -3342,6 +3374,17 @@ HTMLWidgets.widget({
           updateSelectedMaterial(function(spec) {
             spec.wireframe = !!evt.target.checked;
           });
+        });
+
+        state.ui.meshBoundingBoxInput.addEventListener("change", function(evt) {
+          var target = selectedMeshTarget(state);
+          if (!target) {
+            return;
+          }
+          target.primitive.show_bounding_box = !!evt.target.checked;
+          applyBoundingBoxToEditorTarget(target);
+          updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+          publishSceneEditorState(state);
         });
 
         state.ui.materialBackfaceInput.addEventListener("change", function(evt) {
@@ -3746,6 +3789,7 @@ HTMLWidgets.widget({
       state.ui.materialMetallicSlider.disabled = !showMaterial;
       state.ui.materialRoughnessSlider.disabled = !showMaterial;
       state.ui.materialWireframeInput.disabled = !showMaterial;
+      state.ui.meshBoundingBoxInput.disabled = !showMaterial;
       state.ui.materialBackfaceInput.disabled = !showMaterial;
       state.ui.materialSection.style.display = meshTargets.length ? "block" : "none";
       if (showMaterial) {
@@ -3762,6 +3806,7 @@ HTMLWidgets.widget({
         state.ui.materialRoughnessSlider.value = String(Number(materialSpec.roughness === undefined ? 1 : materialSpec.roughness));
         state.ui.materialRoughnessValue.textContent = formatRNumber(Number(materialSpec.roughness === undefined ? 1 : materialSpec.roughness));
         state.ui.materialWireframeInput.checked = !!materialSpec.wireframe;
+        state.ui.meshBoundingBoxInput.checked = !!(materialTarget.primitive && materialTarget.primitive.show_bounding_box);
         state.ui.materialBackfaceInput.checked = materialSpec.backface_culling !== false;
         if (!state.ui.materialSaveNameInput.value) {
           state.ui.materialSaveNameInput.value = (materialTarget.name || "material").replace(/\s+/g, "_").toLowerCase();
@@ -4837,6 +4882,7 @@ HTMLWidgets.widget({
       }
 
       targets.push(target);
+      applyBoundingBoxToEditorTarget(target);
     }
 
     function nextEditorTargetIndex(state) {
@@ -5047,12 +5093,14 @@ HTMLWidgets.widget({
         target.importedMeshes.forEach(function(mesh) {
           applyMaterial(mesh, {material: target.primitive.material});
         });
+        applyBoundingBoxToEditorTarget(target);
         return;
       }
 
       if (target.node && target.node.material !== undefined) {
         applyMaterial(target.node, target.primitive);
       }
+      applyBoundingBoxToEditorTarget(target);
     }
 
     function resetSelectedMeshTarget(state) {
@@ -5072,6 +5120,7 @@ HTMLWidgets.widget({
         applyTransform(target.node, target.primitive);
         applyMaterialToEditorTarget(target);
       }
+      applyBoundingBoxToEditorTarget(target);
 
       updateSceneEditorPanel(state, buildSceneEditorPayload(state));
       publishSceneEditorState(state);

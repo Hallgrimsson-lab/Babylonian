@@ -543,6 +543,9 @@ seed_scene_state_entry <- function(object, index) {
     entry$position <- normalize_transform_vector(object$position %||% c(0, 0, 0), "position")
     entry$rotation <- normalize_transform_vector(object$rotation %||% c(0, 0, 0), "rotation")
     entry$scaling <- normalize_transform_vector(object$scaling %||% c(1, 1, 1), "scaling")
+    if (!is.null(object$show_bounding_box)) {
+      entry$show_bounding_box <- isTRUE(object$show_bounding_box)
+    }
     if (!is.null(object$material)) {
       entry$material <- normalize_material3d(object$material)
     }
@@ -687,6 +690,10 @@ normalize_scene_state_entry <- function(x) {
 
   if (!is.null(x$material)) {
     entry$material <- normalize_material3d(x$material)
+  }
+
+  if (!is.null(x$show_bounding_box)) {
+    entry$show_bounding_box <- isTRUE(x$show_bounding_box)
   }
 
   if (!is.null(x$morph_target)) {
@@ -838,6 +845,10 @@ apply_scene_state_entry <- function(object, entry) {
 
   if (!is.null(entry$material)) {
     object$material <- normalize_material3d(entry$material)
+  }
+
+  if (!is.null(entry$show_bounding_box)) {
+    object$show_bounding_box <- isTRUE(entry$show_bounding_box)
   }
 
   if (!is.null(entry$morph_target) && !is.null(object$morph_target)) {

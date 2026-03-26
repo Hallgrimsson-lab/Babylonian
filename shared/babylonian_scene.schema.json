@@ -36,6 +36,12 @@
         },
         "view": {
           "$ref": "#/$defs/view"
+        },
+        "title": {
+          "$ref": "#/$defs/title"
+        },
+        "scale_bar": {
+          "$ref": "#/$defs/scale_bar"
         }
       },
       "additionalProperties": true
@@ -99,6 +105,69 @@
             }
           },
           "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
+    },
+    "title": {
+      "type": "object",
+      "properties": {
+        "main": {
+          "type": "string"
+        },
+        "sub": {
+          "type": "string"
+        },
+        "xlab": {
+          "type": "string"
+        },
+        "ylab": {
+          "type": "string"
+        },
+        "zlab": {
+          "type": "string"
+        },
+        "color": {
+          "$ref": "#/$defs/color"
+        },
+        "cex": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": true
+    },
+    "scale_bar": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "length": {
+          "type": "number"
+        },
+        "units": {
+          "type": "string"
+        },
+        "custom_units": {
+          "type": ["string", "null"]
+        },
+        "label": {
+          "type": "string"
+        },
+        "position": {
+          "oneOf": [
+            {
+              "enum": ["topleft", "topright", "bottomleft", "bottomright"]
+            },
+            {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "type": "number"
+              }
+            }
+          ]
         }
       },
       "additionalProperties": true
