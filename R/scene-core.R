@@ -622,10 +622,35 @@ normalize_user_matrix <- function(x) {
 #' This clears the in-memory scene state used by `plot3d(..., add = TRUE)` and
 #' helper wrappers such as [points3d()] and [spheres3d()].
 #'
+#' @seealso [current_scene3d()]
+#'
 #' @export
 clear_scene3d <- function() {
   .babylon_state$current_scene <- NULL
   invisible(NULL)
+}
+
+#' Return the current Babylonian scene accumulator
+#'
+#' This returns the in-memory `babylon_scene` specification built up by
+#' `plot3d(..., add = TRUE)` and helper wrappers such as [points3d()] and
+#' [spheres3d()]. It is distinct from [last_scene_state()], which only stores
+#' the most recent interactive editor state from [edit_scene3d()].
+#'
+#' @return A `babylon_scene` object, or `NULL` if no accumulated scene exists.
+#'
+#' @export
+current_scene3d <- function() {
+  scene <- current_scene_spec()
+  if (is.null(scene)) {
+    return(NULL)
+  }
+
+  if (!inherits(scene, "babylon_scene")) {
+    scene <- structure(scene, class = c("babylon_scene", "list"))
+  }
+
+  scene
 }
 
 #' Register knitr hooks for inline Babylonian notebook output

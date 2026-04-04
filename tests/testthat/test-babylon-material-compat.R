@@ -66,6 +66,19 @@ testthat::test_that("scene3d builds a first-class scene spec that babylon render
   testthat::expect_identical(widget$x$scene$title$main, "Scene Spec")
 })
 
+testthat::test_that("current_scene3d returns the accumulated additive scene", {
+  clear_scene3d()
+
+  plot3d(matrix(c(0, 0, 0), ncol = 3), add = FALSE, axes = FALSE)
+  spheres3d(1, 1, 1, add = TRUE, axes = FALSE)
+
+  scene <- current_scene3d()
+
+  testthat::expect_s3_class(scene, "babylon_scene")
+  testthat::expect_length(scene$objects, 2L)
+  testthat::expect_true(is.null(last_scene_state()))
+})
+
 testthat::test_that("par3d windowRect sets default widget sizing", {
   previous_par3d <- .babylon_state$par3d
   previous_last_scene <- .babylon_state$last_scene_par3d
@@ -104,6 +117,23 @@ testthat::test_that("scene editor state carries and reapplies post-process setti
 
   testthat::expect_equal(updated$x$scene$postprocess[[1]]$focus_distance, 120)
   testthat::expect_identical(updated$x$scene$postprocess[[1]]$blur_level, "high")
+})
+
+testthat::test_that("apply_scene_state accepts create_pose_3d-style view payloads", {
+  widget <- babylon(
+    data = list(as_babylon_points(matrix(c(0, 0, 0), ncol = 3)))
+  )
+
+  pose <- list(
+    zoom = 0.8,
+    userMatrix = diag(4),
+    bg = "#ffffff"
+  )
+
+  updated <- apply_scene_state(widget, state = pose)
+
+  testthat::expect_equal(updated$x$scene$view$zoom, 0.8)
+  testthat::expect_identical(updated$x$scene$view$bg, "#FFFFFF")
 })
 
 testthat::test_that("scene editor removals persist when scene state is reapplied", {
@@ -228,6 +258,24 @@ testthat::test_that("planes3d fits a plane from three points", {
   testthat::expect_identical(widget$x$objects[[1]]$type, "planes3d")
   testthat::expect_equal(dim(widget$x$objects[[1]]$coefficients), c(1L, 4L))
   testthat::expect_equal(widget$x$objects[[1]]$coefficients[1, 4], 0)
+})
+
+testthat::test_that("planes3d recycles coefficients like rgl", {
+  widget <- planes3d(
+    a = c(1, 0),
+    b = 0,
+    c = 1,
+    d = c(0, -2),
+    add = FALSE,
+    axes = FALSE
+  )
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_identical(widget$x$objects[[1]]$type, "planes3d")
+  testthat::expect_equal(
+    widget$x$objects[[1]]$coefficients,
+    cbind(c(1, 0), c(0, 0), c(1, 1), c(0, -2))
+  )
 })
 
 testthat::test_that("numeric RGB vectors normalize from 0-1 and 0-255 ranges", {

@@ -16,7 +16,8 @@ planes3d(
 }
 \arguments{
 \item{...}{Plane coefficients. Supply either four numeric vectors
-`a, b, c, d` of equal length or a matrix/data frame with four columns.}
+`a, b, c, d` of equal length, a matrix/data frame with four columns, or a
+`3 x 3` matrix of points used to fit a single plane.}
 
 \item{color}{Plane color.}
 

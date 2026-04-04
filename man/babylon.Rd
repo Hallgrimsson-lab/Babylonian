@@ -16,14 +16,21 @@ babylon(
 )
 }
 \arguments{
-\item{data}{A list of scene objects to be passed to the widget. Entries can
-be Babylonian primitive specifications, file-backed meshes created with
-[import_mesh()], or `mesh3d` objects such as those returned by Morpho.}
+\item{data}{A list of scene objects to be passed to the widget, or a
+`babylon_scene` object created by [scene3d()]. Entries can be Babylonian
+primitive specifications, file-backed meshes created with [import_mesh()],
+or `mesh3d` objects such as those returned by Morpho.}
 
 \item{interaction}{Optional interaction settings used by bespoke tools such
 as landmark digitizing.}
 
 \item{scene}{Optional scene decorations and display settings.}
+
+\item{sync_group}{Optional shared synchronization group for multi-scene
+layouts.}
+
+\item{sync_camera}{Whether camera updates should be shared within the sync
+group.}
 
 \item{width}{The width of the widget.}
 

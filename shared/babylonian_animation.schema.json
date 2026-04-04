@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://babylonian.dev/schema/animation-0.1.0.json",
+  "title": "Babylonian Animation",
+  "type": "object",
+  "properties": {
+    "views": {
+      "type": "array",
+      "items": {
+        "$ref": "https://babylonian.dev/schema/scene-0.1.0.json#/$defs/view"
+      }
+    },
+    "morph": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      }
+    },
+    "morph_target": {
+      "type": ["string", "integer", "null"]
+    },
+    "heatmap": {
+      "type": "boolean"
+    },
+    "heatmap_args": {
+      "type": ["object", "null"]
+    },
+    "render": {
+      "type": "object",
+      "properties": {
+        "fps": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "vwidth": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "vheight": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "delay": {
+          "type": "number",
+          "minimum": 0
+        },
+        "filename_pattern": {
+          "type": "string"
+        },
+        "type": {
+          "enum": ["gif", "video", null]
+        },
+        "loop": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "keep_frames": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

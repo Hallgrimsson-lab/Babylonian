@@ -20,7 +20,9 @@ spheres3d(
 \arguments{
 \item{x, y, z}{Point coordinates.}
 
-\item{radius}{Sphere radius relative to scene radius.}
+\item{radius}{Sphere radius relative to scene radius. Babylonian applies a
+small compatibility factor internally so values feel closer to
+`rgl::spheres3d()`.}
 
 \item{color}{Sphere color, or a vector of colors with one entry per point.}
 

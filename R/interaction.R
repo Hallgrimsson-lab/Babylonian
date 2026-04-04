@@ -572,6 +572,10 @@ normalize_scene_state <- function(x) {
     stop("`state` must be a list returned by `edit_scene3d()`.", call. = FALSE)
   }
 
+  if (is.null(x$view) && is_scene_view_payload(x)) {
+    x <- list(view = x)
+  }
+
   state <- list(
     view = NULL,
     postprocess = NULL,
@@ -620,6 +624,23 @@ normalize_scene_state <- function(x) {
   }
 
   state
+}
+
+is_scene_view_payload <- function(x) {
+  if (!is.list(x) || !length(x)) {
+    return(FALSE)
+  }
+
+  view_fields <- c("zoom", "userMatrix", "bg", "camera", "windowRect")
+  payload_names <- names(x) %||% character(0)
+  if (!length(payload_names)) {
+    return(FALSE)
+  }
+
+  any(payload_names %in% view_fields) && !any(payload_names %in% c(
+    "objects", "removed_objects", "postprocess", "scale_bar", "clipping",
+    "selected", "gizmo_mode", "gizmos_visible"
+  ))
 }
 
 normalize_scene_state_lookup <- function(x) {

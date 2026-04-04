@@ -416,7 +416,7 @@ sev_vec <- (crouzon_severity$vb - crouzon_intercept$vb)/2 + crouzon_intercept$vb
 crouzon_severity$vb <- sev_vec
 
 plot3d(crouzon_severity)
-
+library(Morpho)
 mesh2ply(crouzon_age, filename = "inst/extdata/Crouzon Syndrome_age")
 mesh2ply(crouzon_sex, filename = "inst/extdata/Crouzon Syndrome_sex")
 mesh2ply(crouzon_severity, filename = "inst/extdata/Crouzon Syndrome_severity")
@@ -448,7 +448,9 @@ plot3d(test1)
 shade3d(test2, color = "orange", alpha = .5)
 
 bg3d("black")
-meshDist(test1, test2, alpha = 0, displace = T, from = -2, to = 2)
+test1 <- crouzon_intercept
+test2 <- crouzon_age
+Babylonian::meshDist(test1, test2, alpha = 0, displace = T, from = -2, to = 2)
 edit_scene3d(shade3d)
 
 

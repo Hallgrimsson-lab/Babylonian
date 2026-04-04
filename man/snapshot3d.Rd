@@ -9,8 +9,8 @@
 snapshot3d(
   filename = "snapshot3d.png",
   widget = NULL,
-  vwidth = 800,
-  vheight = 800,
+  vwidth = NULL,
+  vheight = NULL,
   delay = 0.5,
   ...
 )
@@ -18,8 +18,8 @@ snapshot3d(
 rgl.snapshot(
   filename = "snapshot3d.png",
   widget = NULL,
-  vwidth = 800,
-  vheight = 800,
+  vwidth = NULL,
+  vheight = NULL,
   delay = 0.5,
   ...
 )
@@ -27,8 +27,8 @@ rgl.snapshot(
 snapshot(
   filename = "snapshot3d.png",
   widget = NULL,
-  vwidth = 800,
-  vheight = 800,
+  vwidth = NULL,
+  vheight = NULL,
   delay = 0.5,
   ...
 )
@@ -39,9 +39,11 @@ snapshot(
 \item{widget}{Optional Babylonian htmlwidget. If omitted, the current scene
 from the `plot3d()` accumulator is rendered.}
 
-\item{vwidth}{Viewport width passed to [webshot2::webshot()].}
+\item{vwidth}{Viewport width passed to [webshot2::webshot()]. When `NULL`,
+Babylonian uses the current `par3d(windowRect=...)` width.}
 
-\item{vheight}{Viewport height passed to [webshot2::webshot()].}
+\item{vheight}{Viewport height passed to [webshot2::webshot()]. When `NULL`,
+Babylonian uses the current `par3d(windowRect=...)` height.}
 
 \item{delay}{Delay (seconds) before the screenshot is taken.}
 

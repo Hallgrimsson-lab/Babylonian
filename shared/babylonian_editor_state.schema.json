@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://babylonian.dev/schema/editor-state-0.1.0.json",
+  "title": "Babylonian Editor State",
+  "type": "object",
+  "properties": {
+    "view": {
+      "$ref": "https://babylonian.dev/schema/scene-0.1.0.json#/$defs/view"
+    },
+    "postprocess": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object"
+      }
+    },
+    "scale_bar": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "https://babylonian.dev/schema/scene-0.1.0.json#/$defs/scale_bar"
+        }
+      ]
+    },
+    "clipping": {
+      "type": ["object", "null"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "material": {
+          "type": "string"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "z": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": true
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/object_state"
+      }
+    },
+    "removed_objects": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/object_lookup"
+      }
+    },
+    "selected": {
+      "type": ["object", "null"]
+    },
+    "gizmo_mode": {
+      "type": ["string", "null"]
+    },
+    "gizmos_visible": {
+      "type": ["boolean", "null"]
+    }
+  },
+  "$defs": {
+    "vector3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "number"
+      }
+    },
+    "morph_target_state": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": ["string", "null"]
+        },
+        "influence": {
+          "type": "number"
+        }
+      },
+      "required": ["influence"],
+      "additionalProperties": true
+    },
+    "object_lookup": {
+      "type": "object",
+      "required": ["index"],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "primitive_type": {
+          "type": "string"
+        },
+        "node_type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "object_state": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/object_lookup"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "position": {
+              "$ref": "#/$defs/vector3"
+            },
+            "rotation": {
+              "$ref": "#/$defs/vector3"
+            },
+            "scaling": {
+              "$ref": "#/$defs/vector3"
+            },
+            "direction": {
+              "$ref": "#/$defs/vector3"
+            },
+            "material": {
+              "type": "object"
+            },
+            "morph_target": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/morph_target_state"
+              }
+            },
+            "light_type": {
+              "type": "string"
+            },
+            "intensity": {
+              "type": "number"
+            },
+            "angle": {
+              "type": "number"
+            },
+            "exponent": {
+              "type": "number"
+            },
+            "range": {
+              "type": "number"
+            },
+            "shadow_darkness": {
+              "type": "number"
+            },
+            "diffuse": {
+              "type": "string"
+            },
+            "specular": {
+              "type": "string"
+            },
+            "ground_color": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "shadow_enabled": {
+              "type": "boolean"
+            },
+            "created_in_editor": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

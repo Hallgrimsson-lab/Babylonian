@@ -4,7 +4,13 @@
 \alias{par3d}
 \title{Get or set Babylonian view parameters}
 \usage{
-par3d(zoom = NULL, userMatrix = NULL, bg = NULL, reset = FALSE)
+par3d(
+  zoom = NULL,
+  userMatrix = NULL,
+  bg = NULL,
+  windowRect = NULL,
+  reset = FALSE
+)
 }
 \arguments{
 \item{zoom}{Optional zoom multiplier.}
@@ -13,9 +19,15 @@ par3d(zoom = NULL, userMatrix = NULL, bg = NULL, reset = FALSE)
 
 \item{bg}{Optional background color for the scene canvas.}
 
+\item{windowRect}{Optional numeric vector of length 4, interpreted like
+`rgl::par3d(windowRect = c(x1, y1, x2, y2))`. Babylonian ignores the
+screen position and uses only the implied width (`x2 - x1`) and height
+(`y2 - y1`) as defaults for new scene widgets and snapshots.}
+
 \item{reset}{Whether to restore the default view state.}
 }
 \description{
 This stores lightweight `par3d()`-style view settings that new Babylonian
-scenes will use, including `zoom`, `userMatrix`, and background color.
+scenes will use, including `zoom`, `userMatrix`, background color, and an
+optional `windowRect` sizing hint.
 }

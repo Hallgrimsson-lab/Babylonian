@@ -459,9 +459,12 @@ scaleBar3d <- function(length, units = NULL, custom_units = NULL, label = NULL, 
 #' Planes are specified by coefficients `(a, b, c, d)` for equations of the
 #' form `a*x + b*y + c*z + d = 0`.
 #'
-#' @param ... Plane coefficients. Supply either four numeric vectors
-#'   `a, b, c, d` of equal length, a matrix/data frame with four columns, or a
-#'   `3 x 3` matrix of points used to fit a single plane.
+#' @param a,b,c,d Plane coefficients for equations of the form
+#'   `a*x + b*y + c*z + d = 0`. Coefficients are parsed using
+#'   [graphics::xyz.coords()] semantics and recycled as needed, which matches
+#'   `rgl::planes3d()`. Babylonian also accepts a `3 x 3` point matrix in `a`
+#'   to fit a single plane.
+#' @param ... Reserved for future material-style arguments.
 #' @param color Plane color.
 #' @param alpha Plane opacity.
 #' @param size Plane sheet size in world units. If `NULL`, Babylonian uses a
@@ -473,8 +476,8 @@ scaleBar3d <- function(length, units = NULL, custom_units = NULL, label = NULL, 
 #' @param nticks Approximate number of tick marks per axis when `axes = TRUE`.
 #'
 #' @export
-planes3d <- function(..., color = "gray70", alpha = 0.4, size = NULL, add = TRUE, axes = TRUE, nticks = 5) {
-  coeffs <- plane_coefficients(...)
+planes3d <- function(a, b = NULL, c = NULL, d = 0, ..., color = "gray70", alpha = 0.4, size = NULL, add = TRUE, axes = TRUE, nticks = 5) {
+  coeffs <- plane_coefficients(a, b = b, c = c, d = d)
   planes <- list(
     type = "planes3d",
     coefficients = unname(coeffs),

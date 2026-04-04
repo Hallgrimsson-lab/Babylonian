@@ -111,7 +111,6 @@ Adding scale bars to your 3D plots:
 plot3d(mesh)
 scaleBar3d(length = 100, units = "mm", position = "bottomleft")
 
-
 ```
 
 BabylonJS light types are available through `light3d()` and dedicated wrappers:

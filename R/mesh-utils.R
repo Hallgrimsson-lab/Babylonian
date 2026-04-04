@@ -946,47 +946,35 @@ validate_xyz_matrix <- function(x) {
   x
 }
 
-plane_coefficients <- function(...) {
-  args <- list(...)
+plane_coefficients <- function(a, b = NULL, c = NULL, d = 0) {
+  if (missing(a)) {
+    stop("Supply planes as `(a, b, c, d)` coefficients, a four-column coefficient matrix, or a 3 x 3 point matrix.", call. = FALSE)
+  }
 
-  if (length(args) == 1L) {
-    x <- args[[1]]
-    if (is.data.frame(x)) {
-      x <- as.matrix(x)
+  if (is.data.frame(a)) {
+    a <- as.matrix(a)
+  }
+
+  if (is.matrix(a)) {
+    if (ncol(a) == 3L && nrow(a) == 3L && is.null(b) && is.null(c)) {
+      return(matrix(plane_coefficients_from_points(a), nrow = 1L))
     }
-    if (is.matrix(x)) {
-      if (ncol(x) == 3L && nrow(x) == 3L) {
-        return(matrix(plane_coefficients_from_points(x), nrow = 1L))
-      }
-      if (ncol(x) != 4L) {
-        stop("Plane inputs must be either a 3 x 3 point matrix or a matrix with exactly four coefficient columns.", call. = FALSE)
-      }
-      storage.mode(x) <- "numeric"
-      return(x)
+
+    if (ncol(a) == 4L && is.null(b) && is.null(c)) {
+      storage.mode(a) <- "numeric"
+      return(a)
     }
   }
 
-  if (length(args) != 4L) {
-    stop("Supply planes as four coefficient vectors `(a, b, c, d)` or a matrix with four columns.", call. = FALSE)
-  }
-
-  lens <- vapply(args, length, integer(1))
-  if (length(unique(lens)) != 1L) {
-    stop("Plane coefficient vectors must all have the same length.", call. = FALSE)
-  }
-
-  coeffs <- cbind(
-    as.numeric(args[[1]]),
-    as.numeric(args[[2]]),
-    as.numeric(args[[3]]),
-    as.numeric(args[[4]])
+  coords <- grDevices::xyz.coords(a, y = b, z = c, recycle = TRUE, setLab = FALSE)
+  normals <- cbind(
+    as.numeric(coords$x),
+    as.numeric(coords$y),
+    as.numeric(coords$z)
   )
+  offsets <- rep_len(as.numeric(d), nrow(normals))
 
-  if (ncol(coeffs) != 4L) {
-    stop("Plane coefficients must define four values per plane.", call. = FALSE)
-  }
-
-  coeffs
+  cbind(normals, offsets)
 }
 
 plane_coefficients_from_points <- function(x) {

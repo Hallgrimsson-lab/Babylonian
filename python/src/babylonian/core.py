@@ -5,6 +5,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from html import escape
 import json
+import os
 from pathlib import Path
 import uuid
 from typing import Any, Iterable, Optional, Sequence
@@ -38,6 +39,29 @@ _BABYLON_LOADERS_JS: str = (_LIB_DIR / "babylonjs.loaders.min.js").read_text(enc
 # UMD wrappers in both libraries fall through to `e.BABYLON = t()` (e = self =
 # window) — no CDN required and no RequireJS interference.
 _WIDGET_JS: str = (Path(__file__).with_name("widget.js")).read_text(encoding="utf-8")
+
+
+def _in_ipython_kernel() -> bool:
+    try:
+        from IPython import get_ipython
+    except ImportError:
+        return False
+    shell = get_ipython()
+    return shell is not None and shell.__class__.__name__ == "ZMQInteractiveShell"
+
+
+def _should_explicitly_display() -> bool:
+    return _in_ipython_kernel() and "VSCODE_PID" in os.environ
+
+
+def _display_in_notebook(widget: Any) -> None:
+    if not _should_explicitly_display():
+        return
+    try:
+        from IPython.display import display
+    except ImportError:
+        return
+    display(widget)
 
 
 def _is_trimesh(obj: Any) -> bool:
@@ -525,7 +549,9 @@ class Scene:
     ) -> "BabylonWidget":
         if renderer is None:
             renderer = "anywidget" if anywidget is not None else "iframe"
-        return render_scene3d(self, width=width, height=height, renderer=renderer)
+        widget = render_scene3d(self, width=width, height=height, renderer=renderer)
+        _display_in_notebook(widget)
+        return widget
 
     def save_html(
         self,
@@ -1147,7 +1173,9 @@ def plot3d(
         add=add,
         wireframe=False,
     )
-    return render_scene3d(scene, width=width, height=height, renderer=renderer)
+    widget = render_scene3d(scene, width=width, height=height, renderer=renderer)
+    _display_in_notebook(widget)
+    return widget
 
 
 def snapshot3d(
@@ -1255,4 +1283,6 @@ def wireframe3d(
         add=add,
         wireframe=True,
     )
-    return render_scene3d(scene, width=width, height=height, renderer=renderer)
+    widget = render_scene3d(scene, width=width, height=height, renderer=renderer)
+    _display_in_notebook(widget)
+    return widget
