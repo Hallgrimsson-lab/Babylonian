@@ -1009,16 +1009,28 @@ if anywidget is not None and traitlets is not None:  # pragma: no branch
         def __init__(self, scene: Scene, width: int = 900, height: int = 700) -> None:
             super().__init__()
             self.scene_payload = scene.to_payload()
+            self.scene_state = {}
             self.width = int(width)
             self.height = int(height)
             self.element_id = f"babylonian-py-{uuid.uuid4().hex}"
 
-        def save_html(self, path: str | Path) -> Path:
-            scene = Scene(
-                objects=self.scene_payload.get("objects", []),
-                scene=self.scene_payload.get("scene", {}),
-                interaction=self.scene_payload.get("interaction"),
+        def get_scene(self) -> "Scene":
+            """Return a Scene reflecting the current live state of the widget."""
+            state = self.scene_state
+            if not state:
+                return Scene(
+                    objects=deepcopy(self.scene_payload.get("objects", [])),
+                    scene=deepcopy(self.scene_payload.get("scene", {})),
+                    interaction=deepcopy(self.scene_payload.get("interaction")),
+                )
+            return Scene(
+                objects=deepcopy(state.get("objects", [])),
+                scene=deepcopy(state.get("scene", {})),
+                interaction=deepcopy(state.get("interaction")),
             )
+
+        def save_html(self, path: str | Path) -> Path:
+            scene = self.get_scene()
             return BabylonHTMLWidget(
                 scene=scene,
                 width=self.width,

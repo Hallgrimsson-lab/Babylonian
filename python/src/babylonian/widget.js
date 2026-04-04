@@ -243,7 +243,7 @@ function renderScaleBar(scaleBarEl, payload, camera, engine, sceneMin, sceneMax)
   }
 }
 
-function buildScene(el, payload, width, height, elementId) {
+function buildScene(el, payload, width, height, elementId, modelRef) {
   el.replaceChildren();
 
   const container = document.createElement("div");
@@ -535,7 +535,18 @@ function buildScene(el, payload, width, height, elementId) {
     }
     publishViewStateHandle = window.requestAnimationFrame(() => {
       publishViewStateHandle = null;
-      emitHostEvent(elementId, "par3d", currentPar3dState(camera, payload));
+      const par3d = currentPar3dState(camera, payload);
+      emitHostEvent(elementId, "par3d", par3d);
+
+      if (typeof modelRef !== "undefined" && modelRef) {
+        const nextPayload = JSON.parse(JSON.stringify(payload || {}));
+        if (!nextPayload.scene) {
+          nextPayload.scene = {};
+        }
+        nextPayload.scene.view = par3d;
+        modelRef.set("scene_state", nextPayload);
+        modelRef.save_changes();
+      }
     });
   };
   camera.onViewMatrixChangedObservable.add(() => {
@@ -559,7 +570,12 @@ function buildScene(el, payload, width, height, elementId) {
   btn.onmouseenter = () => { btn.style.background = "#1d4ed8"; };
   btn.onmouseleave = () => { btn.style.background = "#2563eb"; };
   btn.onclick = () => {
-    emitHostEvent(elementId, "scene_state", currentPar3dState(camera, payload));
+    const nextPayload = JSON.parse(JSON.stringify(payload || {}));
+    if (!nextPayload.scene) {
+      nextPayload.scene = {};
+    }
+    nextPayload.scene.view = currentPar3dState(camera, payload);
+    emitHostEvent(elementId, "scene_state", nextPayload);
     btn.textContent = "✓ Saved";
     btn.style.background = "#16a34a";
     setTimeout(() => {
@@ -615,6 +631,7 @@ export default {
           model.get("width") || 900,
           model.get("height") || 700,
           model.get("element_id") || "",
+          model,
         );
       } catch (err) {
         showWidgetError(el, "Scene render error:\n" + err);

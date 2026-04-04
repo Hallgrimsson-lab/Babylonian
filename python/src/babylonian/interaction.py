@@ -8,6 +8,7 @@ from .core import (
     _display_in_notebook,
     _scene_from_object,
     anywidget,
+    BabylonWidget,
     render_scene3d,
     Scene,
 )
@@ -83,7 +84,15 @@ def _observe_widget_state(widget: Any) -> Any:
     return widget
 
 
-def _coerce_scene(x: Any, **kwargs: Any) -> Scene:
+def _coerce_scene(
+    x: Any,
+    *,
+    color: Optional[str] = None,
+    alpha: Optional[float] = None,
+    axes: bool = True,
+    nticks: int = 5,
+    **kwargs: Any,
+) -> Scene:
     if isinstance(x, Scene):
         return x.clone()
     if hasattr(x, "scene") and isinstance(getattr(x, "scene", None), Scene):
@@ -95,7 +104,36 @@ def _coerce_scene(x: Any, **kwargs: Any) -> Scene:
             scene=payload.get("scene", {}),
             interaction=payload.get("interaction"),
         )
-    return _scene_from_object(x, color=None, alpha=None, axes=True, nticks=5, add=False, **kwargs)
+    return _scene_from_object(
+        x,
+        color=color,
+        alpha=alpha,
+        axes=axes,
+        nticks=nticks,
+        add=False,
+        wireframe=kwargs.get("wireframe", False),
+    )
+
+
+def create_pose_3d(
+    x: Any,
+    *,
+    width: int = 900,
+    height: int = 700,
+    color: Optional[str] = None,
+    alpha: Optional[float] = None,
+    axes: bool = True,
+    nticks: int = 5,
+    **kwargs: Any,
+) -> BabylonWidget:
+    scene = _coerce_scene(
+        x, color=color, alpha=alpha, axes=axes, nticks=nticks, **kwargs
+    )
+    scene.interaction = {"mode": "pose_3d"}
+    scene.scene.pop("view", None)
+    widget = render_scene3d(scene, width=width, height=height, renderer="anywidget")
+    _display_in_notebook(widget)
+    return _observe_widget_state(widget)
 
 
 def edit_scene3d(
@@ -104,11 +142,17 @@ def edit_scene3d(
     width: Optional[int] = None,
     height: Optional[int] = None,
     renderer: Optional[str] = None,
+    color: Optional[str] = None,
+    alpha: Optional[float] = None,
+    axes: bool = True,
+    nticks: int = 5,
     **kwargs: Any,
 ) -> Any:
     global _LAST_SCENE_STATE
 
-    scene = _coerce_scene(x, **kwargs)
+    scene = _coerce_scene(
+        x, color=color, alpha=alpha, axes=axes, nticks=nticks, **kwargs
+    )
     scene.interaction = {"mode": "edit_scene3d"}
     _LAST_SCENE_STATE = _scene_state_from_scene(scene)
 

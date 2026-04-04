@@ -14,6 +14,7 @@ from .core import (
 )
 from .interaction import (
     apply_scene_state,
+    create_pose_3d,
     edit_scene3d,
     last_scene_state,
     retrieve_scene_state,
@@ -25,6 +26,7 @@ __all__ = [
     "apply_scene_state",
     "as_babylon_mesh",
     "clear_scene3d",
+    "create_pose_3d",
     "edit_scene3d",
     "import_model3d",
     "last_scene_state",
