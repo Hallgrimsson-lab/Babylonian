@@ -10,12 +10,15 @@ from .core import (
     shade3d,
     wireframe3d,
 )
+from .interaction import create_pose_3d, edit_scene3d
 
 __all__ = [
     "BabylonScene",
     "Scene",
     "as_babylon_mesh",
     "clear_scene3d",
+    "create_pose_3d",
+    "edit_scene3d",
     "light3d",
     "plot3d",
     "render_scene3d",

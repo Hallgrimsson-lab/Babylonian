@@ -176,7 +176,7 @@ function renderBoundingBox(scene, payload, min, max) {
   );
 }
 
-function buildScene(el, payload, width, height, elementId) {
+function buildScene(el, payload, width, height, elementId, modelRef) {
   el.replaceChildren();
 
   const container = document.createElement("div");
@@ -325,7 +325,18 @@ function buildScene(el, payload, width, height, elementId) {
     }
     publishViewStateHandle = window.requestAnimationFrame(() => {
       publishViewStateHandle = null;
-      emitHostEvent(elementId, "par3d", currentPar3dState(camera, payload));
+      const par3d = currentPar3dState(camera, payload);
+      emitHostEvent(elementId, "par3d", par3d);
+
+      if (typeof modelRef !== "undefined" && modelRef) {
+        const nextPayload = JSON.parse(JSON.stringify(payload || {}));
+        if (!nextPayload.scene) {
+          nextPayload.scene = {};
+        }
+        nextPayload.scene.view = par3d;
+        modelRef.set("scene_state", nextPayload);
+        modelRef.save_changes();
+      }
     });
   };
   camera.onViewMatrixChangedObservable.add(() => {
@@ -363,6 +374,7 @@ export default async function () {
           model.get("width") || 900,
           model.get("height") || 700,
           model.get("element_id") || "",
+          model,
         );
       };
 
