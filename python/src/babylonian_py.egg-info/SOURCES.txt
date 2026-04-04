@@ -2,8 +2,11 @@ README.md
 pyproject.toml
 src/babylonian/__init__.py
 src/babylonian/core.py
+src/babylonian/interaction.py
 src/babylonian/shiny.py
 src/babylonian/widget.js
+src/babylonian/lib/babylon.js
+src/babylonian/lib/babylonjs.loaders.min.js
 src/babylonian_py.egg-info/PKG-INFO
 src/babylonian_py.egg-info/SOURCES.txt
 src/babylonian_py.egg-info/dependency_links.txt
