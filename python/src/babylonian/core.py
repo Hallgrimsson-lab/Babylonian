@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover - fallback when notebook deps are absent
 SCHEMA_NAME = "babylonian.scene"
 SCHEMA_VERSION = "0.1.0"
 _CURRENT_SCENE: Optional["Scene"] = None
+_LAST_SCENE_STATE: Optional[dict[str, Any]] = None
 
 
 def _is_trimesh(obj: Any) -> bool:
@@ -880,3 +881,527 @@ def wireframe3d(
         wireframe=True,
     )
     return render_scene3d(scene, width=width, height=height, renderer=renderer)
+
+
+# ---------------------------------------------------------------------------
+# Scene-state helpers (mirrors interaction.R)
+# ---------------------------------------------------------------------------
+
+def _editable_mesh_primitive_types() -> tuple[str, ...]:
+    return ("sphere", "box", "plane", "cylinder", "cone", "mesh3d")
+
+
+def _normalize_morph_influence(x: Any) -> float:
+    return max(0.0, min(1.0, float(x)))
+
+
+def _normalize_transform_vector(x: Any, name: str) -> list[float]:
+    """Validate and return a length-3 finite numeric list."""
+    if isinstance(x, dict):
+        x = [x.get("x", 0.0), x.get("y", 0.0), x.get("z", 0.0)]
+    if hasattr(x, "tolist"):
+        x = x.tolist()
+    x = list(x)
+    if len(x) != 3:
+        raise ValueError(f"`{name}` must be a finite numeric vector of length 3.")
+    result = [float(v) for v in x]
+    if any(v != v for v in result):  # NaN check
+        raise ValueError(f"`{name}` must contain finite values.")
+    return result
+
+
+def _seed_scene_state_entry(obj: dict[str, Any], index: int) -> Optional[dict[str, Any]]:
+    """Build an initial scene-state entry from an object dict (1-based index).
+
+    Mirrors ``seed_scene_state_entry`` in R/interaction.R.
+    """
+    if obj.get("type") is None:
+        return None
+
+    entry: dict[str, Any] = {
+        "index": index,
+        "primitive_type": obj["type"],
+    }
+
+    if obj.get("name") is not None:
+        entry["name"] = str(obj["name"])
+
+    if obj["type"] == "light3d":
+        entry["node_type"] = "light"
+        entry["light_type"] = obj.get("light_type", "hemispheric")
+        if obj.get("position") is not None:
+            entry["position"] = _normalize_transform_vector(obj["position"], "position")
+        if obj.get("direction") is not None:
+            entry["direction"] = _normalize_transform_vector(obj["direction"], "direction")
+        for nm in (
+            "intensity", "diffuse", "specular", "ground_color", "angle",
+            "exponent", "range", "enabled", "shadow_enabled", "shadow_darkness",
+        ):
+            if obj.get(nm) is not None:
+                entry[nm] = obj[nm]
+        return entry
+
+    if obj["type"] in _editable_mesh_primitive_types():
+        entry["node_type"] = "mesh"
+        entry["position"] = _normalize_transform_vector(
+            obj.get("position", [0, 0, 0]), "position"
+        )
+        entry["rotation"] = _normalize_transform_vector(
+            obj.get("rotation", [0, 0, 0]), "rotation"
+        )
+        entry["scaling"] = _normalize_transform_vector(
+            obj.get("scaling", [1, 1, 1]), "scaling"
+        )
+        if obj.get("show_bounding_box") is not None:
+            entry["show_bounding_box"] = bool(obj["show_bounding_box"])
+        if obj.get("material") is not None:
+            entry["material"] = deepcopy(obj["material"])
+        if obj.get("morph_target") is not None:
+            entry["morph_target"] = [
+                {
+                    "name": t.get("name"),
+                    "influence": _normalize_morph_influence(t.get("influence", 0)),
+                }
+                for t in obj["morph_target"]
+            ]
+        return entry
+
+    return None
+
+
+def _scene_state_from_scene(scene: "Scene") -> dict[str, Any]:
+    """Extract the initial scene-state dict from a Scene object.
+
+    Mirrors ``scene_state_from_widget`` in R/interaction.R.
+    """
+    entries = []
+    for i, obj in enumerate(scene.objects):
+        entry = _seed_scene_state_entry(obj, i + 1)  # 1-based, matching R
+        if entry is not None:
+            entries.append(entry)
+
+    return {
+        "view": deepcopy(scene.scene.get("view")),
+        "postprocess": scene.scene.get("postprocess"),
+        "scale_bar": scene.scene.get("scale_bar"),
+        "clipping": scene.scene.get("clipping"),
+        "objects": entries,
+        "removed_objects": [],
+    }
+
+
+def _normalize_scene_state_lookup(x: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a single removed-object lookup entry.
+
+    Mirrors ``normalize_scene_state_lookup`` in R/interaction.R.
+    """
+    entry: dict[str, Any] = {"index": int(x["index"])}
+    if not (entry["index"] >= 1):
+        raise ValueError("Removed scene-state object indices must be positive integers.")
+    if x.get("name") is not None:
+        entry["name"] = str(x["name"])
+    if x.get("primitive_type") is not None:
+        entry["primitive_type"] = str(x["primitive_type"])
+    if x.get("node_type") is not None:
+        entry["node_type"] = str(x["node_type"])
+    return entry
+
+
+def _normalize_scene_state_entry(x: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a single scene-state object entry.
+
+    Mirrors ``normalize_scene_state_entry`` in R/interaction.R.
+    """
+    entry: dict[str, Any] = {
+        "index": int(x["index"]),
+        "primitive_type": x.get("primitive_type") or x.get("type"),
+        "node_type": x.get("node_type"),
+    }
+
+    if not (entry["index"] >= 1):
+        raise ValueError("Scene state object indices must be positive integers.")
+
+    if x.get("name") is not None:
+        entry["name"] = str(x["name"])
+
+    for nm in ("position", "rotation", "scaling", "direction"):
+        if x.get(nm) is not None:
+            entry[nm] = _normalize_transform_vector(x[nm], nm)
+
+    if x.get("material") is not None:
+        entry["material"] = deepcopy(x["material"])
+
+    if x.get("show_bounding_box") is not None:
+        entry["show_bounding_box"] = bool(x["show_bounding_box"])
+
+    if x.get("morph_target") is not None:
+        mt = x["morph_target"]
+        # A bare single-target dict (not wrapped in a list)
+        if isinstance(mt, dict) and ("influence" in mt or "name" in mt):
+            mt = [mt]
+        entry["morph_target"] = [
+            {
+                "name": t.get("name"),
+                "influence": _normalize_morph_influence(t.get("influence", 0)),
+            }
+            for t in mt
+        ]
+
+    if x.get("light_type") is not None:
+        entry["light_type"] = str(x["light_type"])
+
+    for nm in ("intensity", "angle", "exponent", "range", "shadow_darkness"):
+        if x.get(nm) is not None:
+            entry[nm] = float(x[nm])
+
+    for nm in ("diffuse", "ground_color"):
+        if x.get(nm) is not None:
+            entry[nm] = str(x[nm])
+
+    if x.get("specular") is not None:
+        entry["specular"] = str(x["specular"])
+
+    if x.get("enabled") is not None:
+        entry["enabled"] = bool(x["enabled"])
+
+    if x.get("shadow_enabled") is not None:
+        entry["shadow_enabled"] = bool(x["shadow_enabled"])
+
+    if x.get("created_in_editor") is not None:
+        entry["created_in_editor"] = bool(x["created_in_editor"])
+
+    return entry
+
+
+def _normalize_scene_state(x: Optional[Any]) -> Optional[dict[str, Any]]:
+    """Validate and normalise an edit_scene3d() scene-state dict.
+
+    Accepts a dict, a JSON string, or None.  Mirrors ``normalize_scene_state``
+    in R/interaction.R.
+    """
+    if x is None:
+        return None
+
+    if isinstance(x, str):
+        try:
+            x = json.loads(x)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise TypeError(
+                "`state` must be a dict returned by `edit_scene3d()`."
+            ) from exc
+
+    if not isinstance(x, dict):
+        raise TypeError("`state` must be a dict returned by `edit_scene3d()`.")
+
+    state: dict[str, Any] = {
+        "view": None,
+        "postprocess": None,
+        "scale_bar": None,
+        "clipping": None,
+        "objects": [],
+        "removed_objects": [],
+    }
+
+    if x.get("view") is not None:
+        state["view"] = deepcopy(x["view"])
+
+    for nm in ("postprocess", "scale_bar", "clipping"):
+        if x.get(nm) is not None:
+            state[nm] = deepcopy(x[nm])
+
+    objects = x.get("objects") or []
+    if objects:
+        state["objects"] = [_normalize_scene_state_entry(e) for e in objects]
+
+    removed = x.get("removed_objects") or []
+    if removed:
+        state["removed_objects"] = [_normalize_scene_state_lookup(e) for e in removed]
+
+    for nm in ("selected", "gizmo_mode", "gizmos_visible"):
+        if x.get(nm) is not None:
+            state[nm] = x[nm]
+
+    return state
+
+
+def _set_last_scene_state(state: Optional[Any]) -> None:
+    global _LAST_SCENE_STATE
+    _LAST_SCENE_STATE = _normalize_scene_state(state)
+
+
+def _locate_scene_state_object(
+    objects: list[dict[str, Any]], entry: dict[str, Any]
+) -> Optional[int]:
+    """Return the 0-based index of the object matching *entry*, or None.
+
+    Name takes priority; falls back to 1-based ``index`` field.
+    Mirrors ``locate_scene_state_object`` in R/interaction.R.
+    """
+    if entry.get("name") is not None:
+        matches = [i for i, obj in enumerate(objects) if obj.get("name") == entry["name"]]
+        if len(matches) == 1:
+            return matches[0]
+
+    idx = int(entry["index"]) - 1  # 1-based (R) → 0-based (Python)
+    if 0 <= idx < len(objects):
+        return idx
+
+    return None
+
+
+def _apply_scene_state_entry(
+    obj: dict[str, Any], entry: dict[str, Any]
+) -> dict[str, Any]:
+    """Return a new object dict with *entry*'s edits applied.
+
+    Mirrors ``apply_scene_state_entry`` in R/interaction.R.
+    """
+    obj = deepcopy(obj)
+
+    for nm in ("position", "rotation", "scaling", "direction"):
+        if entry.get(nm) is not None:
+            obj[nm] = _normalize_transform_vector(entry[nm], nm)
+
+    for nm in (
+        "intensity", "angle", "exponent", "range", "enabled",
+        "light_type", "shadow_enabled", "shadow_darkness",
+    ):
+        if entry.get(nm) is not None:
+            obj[nm] = entry[nm]
+
+    for nm in ("diffuse", "specular", "ground_color"):
+        if entry.get(nm) is not None:
+            obj[nm] = entry[nm]
+
+    if entry.get("material") is not None:
+        obj["material"] = deepcopy(entry["material"])
+
+    if entry.get("show_bounding_box") is not None:
+        obj["show_bounding_box"] = bool(entry["show_bounding_box"])
+
+    if entry.get("morph_target") is not None and obj.get("morph_target") is not None:
+        for i in range(min(len(entry["morph_target"]), len(obj["morph_target"]))):
+            obj["morph_target"][i]["influence"] = _normalize_morph_influence(
+                entry["morph_target"][i].get("influence", 0)
+            )
+            if entry["morph_target"][i].get("name") is not None:
+                obj["morph_target"][i]["name"] = entry["morph_target"][i]["name"]
+
+    return obj
+
+
+def _create_scene_object_from_state(entry: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Create a new scene object from an editor-created state entry.
+
+    Currently only handles ``light3d`` (the only type the R editor can add).
+    Mirrors ``create_scene_object_from_state`` in R/interaction.R.
+    """
+    primitive_type = entry.get("primitive_type")
+
+    if primitive_type == "light3d":
+        obj: dict[str, Any] = {
+            "type": "light3d",
+            "light_type": entry.get("light_type", "hemispheric"),
+            "intensity": float(entry.get("intensity", 1.0)),
+        }
+        for nm in ("name", "position", "direction", "diffuse", "specular", "ground_color"):
+            if entry.get(nm) is not None:
+                obj[nm] = entry[nm]
+        if entry.get("enabled") is not None:
+            obj["enabled"] = bool(entry["enabled"])
+        return obj
+
+    return None
+
+
+def _apply_scene_state_to_objects(
+    objects: list[dict[str, Any]],
+    edits: list[dict[str, Any]],
+    removed_objects: Optional[list[dict[str, Any]]] = None,
+) -> list[dict[str, Any]]:
+    """Apply a list of scene-state edits (and optional removals) to *objects*.
+
+    Returns a new list; does not mutate the input.
+    Mirrors ``apply_scene_state_to_objects`` in R/interaction.R.
+    """
+    removed = removed_objects or []
+
+    if not edits and not removed:
+        return list(objects)
+
+    edited = list(objects)
+
+    # Remove objects in descending index order so earlier removals don't shift
+    # the indices of later ones (same logic as R).
+    if removed:
+        for entry in sorted(removed, key=lambda e: int(e["index"]), reverse=True):
+            idx = _locate_scene_state_object(edited, entry)
+            if idx is not None:
+                del edited[idx]
+
+    for entry in edits:
+        idx = _locate_scene_state_object(edited, entry)
+        if idx is None:
+            created = _create_scene_object_from_state(entry)
+            if created is not None:
+                edited.append(created)
+        else:
+            edited[idx] = _apply_scene_state_entry(edited[idx], entry)
+
+    return edited
+
+
+def _is_interactive() -> bool:
+    """Return True when running inside an interactive IPython/Jupyter session."""
+    try:
+        shell = get_ipython()  # type: ignore[name-defined]
+        return shell is not None
+    except NameError:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Public edit-scene API
+# ---------------------------------------------------------------------------
+
+def last_scene_state() -> Optional[dict[str, Any]]:
+    """Return the most recent scene state captured by :func:`edit_scene3d`.
+
+    Returns ``None`` if no editing session has completed yet.
+    Mirrors ``last_scene_state()`` in R/interaction.R.
+    """
+    return _LAST_SCENE_STATE
+
+
+def apply_scene_state(
+    x: Optional[Any] = None,
+    state: Optional[Any] = None,
+    **kwargs: Any,
+) -> "Scene":
+    """Apply a saved scene editor state to a scene.
+
+    Reapplies a scene state returned by :func:`edit_scene3d` — restoring
+    mesh transforms, light placement, material assignments, morph-target
+    influences, camera pose, post-processing, scale-bar, and clipping-plane
+    settings — and returns the updated :class:`Scene`.
+
+    Parameters
+    ----------
+    x:
+        A :class:`Scene` or any object accepted by :func:`plot3d`.  When
+        omitted the current accumulated scene (set by :func:`plot3d`) is used.
+    state:
+        Scene state dict as returned by :func:`edit_scene3d`.  Defaults to
+        the value of :func:`last_scene_state`.
+
+    Mirrors ``apply_scene_state()`` in R/interaction.R.
+    """
+    global _CURRENT_SCENE
+
+    if state is None:
+        state = last_scene_state()
+
+    state = _normalize_scene_state(state)
+    if state is None:
+        raise RuntimeError(
+            "No scene state is available. Run `edit_scene3d()` first or pass `state`."
+        )
+
+    if x is None:
+        if _CURRENT_SCENE is None:
+            raise RuntimeError(
+                "No active scene available. Plot a scene first or pass `x`."
+            )
+        scene = _CURRENT_SCENE.clone()
+    elif isinstance(x, Scene):
+        scene = x.clone()
+    else:
+        scene = _scene_from_object(
+            x, color=None, alpha=None, axes=True, nticks=5, add=False
+        )
+
+    edits = state.get("objects", [])
+    removed = state.get("removed_objects", [])
+    scene.objects = _apply_scene_state_to_objects(scene.objects, edits, removed)
+
+    if state.get("view") is not None:
+        current_view = deepcopy(scene.scene.get("view", _default_view()))
+        current_view.update(state["view"])
+        scene.scene["view"] = current_view
+
+    for nm in ("postprocess", "scale_bar", "clipping"):
+        if state.get(nm) is not None:
+            scene.scene[nm] = deepcopy(state[nm])
+
+    _set_last_scene_state(state)
+    return scene
+
+
+def edit_scene3d(
+    x: Any,
+    *,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    **kwargs: Any,
+) -> Any:
+    """Interactively edit mesh and light transforms in a 3D scene.
+
+    Opens a Babylonian scene editor with native BabylonJS gizmos for mesh
+    and light primitives.  The returned object captures the camera pose plus
+    edited mesh transforms and light placement so it can be reused later with
+    :func:`apply_scene_state`.
+
+    In interactive Jupyter/IPython contexts an :class:`EditSceneWidget` is
+    returned; its :attr:`~EditSceneWidget.scene_state` property updates live
+    as you interact with the browser editor, and :func:`last_scene_state`
+    always reflects the latest captured state.
+
+    In non-interactive contexts (scripts, CI) a :class:`Scene` with
+    ``interaction = {"mode": "edit_scene3d"}`` is returned so the payload can
+    still be serialised via :meth:`~Scene.save_html` or :meth:`~Scene.to_json`.
+
+    Parameters
+    ----------
+    x:
+        A :class:`Scene` or any object accepted by :func:`plot3d`.
+    width:
+        Widget width in pixels (default 1 100).
+    height:
+        Widget height in pixels (default 800).
+
+    Mirrors ``edit_scene3d()`` in R/interaction.R.
+    """
+    if isinstance(x, Scene):
+        scene = x.clone()
+    elif hasattr(x, "scene") and isinstance(getattr(x, "scene", None), Scene):
+        # BabylonHTMLWidget / BabylonWidget already wrapping a Scene
+        scene = x.scene.clone()
+    elif hasattr(x, "scene_payload") and isinstance(getattr(x, "scene_payload", None), dict):
+        # anywidget BabylonWidget — reconstruct Scene from payload
+        p = x.scene_payload
+        scene = Scene(
+            objects=p.get("objects", []),
+            scene=p.get("scene", {}),
+            interaction=p.get("interaction"),
+        )
+    else:
+        scene = _scene_from_object(
+            x, color=None, alpha=None, axes=True, nticks=5, add=False, **kwargs
+        )
+
+    scene = scene.clone()
+    scene.interaction = {"mode": "edit_scene3d"}
+
+    w = int(width) if width is not None else 1100
+    h = int(height) if height is not None else 800
+
+    initial_state = _scene_state_from_scene(scene)
+    _set_last_scene_state(initial_state)
+
+    if not _is_interactive():
+        return scene
+
+    # Lazy import so the interactive path does not import heavy deps at
+    # module load time and works even when anywidget is absent.
+    from .interaction import _make_edit_widget  # noqa: PLC0415
+    return _make_edit_widget(scene, width=w, height=h)
