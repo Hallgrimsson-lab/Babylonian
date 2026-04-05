@@ -311,12 +311,20 @@ function ensureEditorMode(state) {
 
 function attachEditorTarget(state, target) {
   if (!state || !state.gizmoManager) return;
-  if (state.gizmoManager.attachToNode) {
-    state.gizmoManager.attachToNode(target ? target.node : null);
+  var node = target ? target.node : null;
+  if (!node) {
+    // Detach: try both APIs
+    if (state.gizmoManager.attachToNode) state.gizmoManager.attachToNode(null);
+    else if (state.gizmoManager.attachToMesh) state.gizmoManager.attachToMesh(null);
     return;
   }
-  if (state.gizmoManager.attachToMesh) {
-    state.gizmoManager.attachToMesh(target ? target.node : null);
+  // For Mesh nodes, use attachToMesh; for TransformNodes (lights), use attachToNode
+  if (node.getTotalVertices && state.gizmoManager.attachToMesh) {
+    state.gizmoManager.attachToMesh(node);
+  } else if (state.gizmoManager.attachToNode) {
+    state.gizmoManager.attachToNode(node);
+  } else if (state.gizmoManager.attachToMesh) {
+    state.gizmoManager.attachToMesh(node);
   }
 }
 
@@ -361,9 +369,13 @@ function editorTargetBounds(target, sceneBounds) {
 }
 
 function syncEditorGizmoState(state, camera, sceneBounds) {
-  if (!state || !state.gizmoManager) return;
+  if (!state || !state.gizmoManager) {
+    console.log("[Babylonian Editor] syncGizmo: no state or no gizmoManager", !!state, state && !!state.gizmoManager);
+    return;
+  }
 
   if (state.deferGizmoAttach === true) {
+    console.log("[Babylonian Editor] syncGizmo: deferred — detaching gizmo");
     attachEditorTarget(state, null);
     state.gizmoManager.positionGizmoEnabled = false;
     state.gizmoManager.rotationGizmoEnabled = false;
@@ -378,6 +390,17 @@ function syncEditorGizmoState(state, camera, sceneBounds) {
   var canTranslate = !!target && supportedModes.indexOf("translate") !== -1;
   var canRotate = !!target && supportedModes.indexOf("rotate") !== -1;
   var canScale = !!target && supportedModes.indexOf("scale") !== -1;
+
+  console.log("[Babylonian Editor] syncGizmo:", {
+    targetId: target ? target.id : null,
+    targetKind: target ? target.kind : null,
+    targetNodeType: target && target.node ? target.node.getClassName() : null,
+    visible: visible,
+    mode: state.gizmoMode,
+    canTranslate: canTranslate,
+    canRotate: canRotate,
+    canScale: canScale,
+  });
 
   attachEditorTarget(state, visible ? target : null);
   state.gizmoManager.positionGizmoEnabled = visible && state.gizmoMode === "translate" && canTranslate;
@@ -452,21 +475,45 @@ function createEditorLight(primitive, name, bScene) {
   return { light, editorNode };
 }
 
-function createLightHelper(node, primitive, name, bScene) {
+function createLightHelper(node, primitive, name, bScene, sceneBounds) {
+  if (!node || !node.position) return null;
+
+  // Size proportional to scene, matching R: radius * 0.05, min 0.03
+  var helperSize = sceneBounds && sceneBounds.radius
+    ? Math.max(sceneBounds.radius * 0.05, 0.03)
+    : 0.1;
   var sphere = window.BABYLON.MeshBuilder.CreateSphere(
     name + "-helper",
-    { diameter: 0.3 },
+    { diameter: helperSize * 2 },
     bScene
   );
+  var helperColor = (primitive && primitive.diffuse) ? primitive.diffuse : "#f59e0b";
   var mat = new window.BABYLON.StandardMaterial(name + "-helper-mat", bScene);
-  var c = color3(primitive.diffuse, window.BABYLON.Color3.FromHexString("#f59e0b"));
+  var c = color3(helperColor, window.BABYLON.Color3.FromHexString("#f59e0b"));
   mat.diffuseColor = c;
   mat.emissiveColor = c.scale(0.3);
   mat.alpha = 0.85;
   sphere.material = mat;
   sphere.isPickable = true;
-  if (node && node.position) sphere.position.copyFrom(node.position);
+  sphere.metadata = { babylonianHelper: true };
+  sphere.position.copyFrom(node.position);
   return sphere;
+}
+
+function updateLightHelpers(state) {
+  if (!state || !state.targets || !state.targets.length) return;
+  state.targets.forEach(function(target) {
+    if (target.kind !== "light") return;
+    // Sync light position from editor node
+    if (target.light && target.node && target.node.position && target.light.position) {
+      target.light.position.copyFrom(target.node.position);
+      target.primitive.position = vectorToArray(target.node.position);
+    }
+    // Sync helper sphere to node position
+    if (target.helper && target.node && target.node.position) {
+      target.helper.position.copyFrom(target.node.position);
+    }
+  });
 }
 
 function defaultLightPosition(sceneBounds) {
@@ -829,37 +876,51 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
     // Create light helpers for existing light targets
     editorState.targets.forEach(function(target) {
       if (target.kind === "light") {
-        target.helper = createLightHelper(target.node, target.primitive, target.name || target.id, bScene);
+        target.helper = createLightHelper(target.node, target.primitive, target.name || target.id, bScene, sceneBounds);
         if (target.helper) editorState.helpers.push(target.helper);
       }
     });
 
-    // Pointer picking for selecting targets
+    // Pointer picking for selecting targets via raycasting
     bScene.onPointerObservable.add(function(pointerInfo) {
       if (!pointerInfo || pointerInfo.type !== B.PointerEventTypes.POINTERPICK) return;
       var pickInfo = pointerInfo.pickInfo;
       if (!pickInfo || !pickInfo.hit || !pickInfo.pickedMesh) return;
+      // Ignore gizmo meshes
       if (pickInfo.pickedMesh.name && /gizmo/i.test(pickInfo.pickedMesh.name)) return;
+
+      var pickedMesh = pickInfo.pickedMesh;
+      console.log("[Babylonian Editor] Picked mesh:", pickedMesh.name, "| Total targets:", editorState.targets.length);
 
       var selectedTarget = null;
       editorState.targets.forEach(function(target) {
         if (selectedTarget) return;
-        // Check direct mesh match
-        if (target.node === pickInfo.pickedMesh) { selectedTarget = target; return; }
-        // Check if picked mesh is child of target node
-        var p = pickInfo.pickedMesh.parent;
+        // Direct match
+        if (target.node === pickedMesh) { selectedTarget = target; return; }
+        // Check if picked mesh is a child/descendant of the target node
+        var p = pickedMesh.parent;
         while (p) { if (p === target.node) { selectedTarget = target; return; } p = p.parent; }
-        // Check helper sphere
-        if (target.helper === pickInfo.pickedMesh) { selectedTarget = target; return; }
+        // Check helper sphere (for lights)
+        if (target.helper === pickedMesh) { selectedTarget = target; return; }
+        // Check by name match (fallback for meshes that share name)
+        if (target.node && target.node.name && target.node.name === pickedMesh.name) {
+          selectedTarget = target; return;
+        }
       });
-      if (!selectedTarget) return;
 
+      if (!selectedTarget) {
+        console.log("[Babylonian Editor] No target matched for picked mesh:", pickedMesh.name);
+        return;
+      }
+
+      console.log("[Babylonian Editor] Selected target:", selectedTarget.id, selectedTarget.kind, selectedTarget.name);
       editorState.selectedId = selectedTarget.id;
       editorState.deferGizmoAttach = false;
       if (selectedTarget.kind === "mesh") editorState.sectionOpen.meshes = true;
       if (selectedTarget.kind === "light") editorState.sectionOpen.lights = true;
       syncEditorGizmoState(editorState, camera, sceneBounds);
       updateEditorPanel();
+      publishEditorState();
     });
 
     // --- Build UI panel HTML ---
@@ -1244,7 +1305,7 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
     };
     state.targets.push(target);
 
-    target.helper = createLightHelper(target.node, primitive, primitive.name, bScene);
+    target.helper = createLightHelper(target.node, primitive, primitive.name, bScene, sceneBounds);
     if (target.helper) state.helpers.push(target.helper);
 
     // Update light helper positions
@@ -1531,6 +1592,12 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
     updateScaleBarDisplay();
   });
   engine.resize();
+  // In editor mode, sync light helper positions every frame so they track gizmo drags
+  if (isEditorMode && editorState) {
+    bScene.registerBeforeRender(function() {
+      updateLightHelpers(editorState);
+    });
+  }
   engine.runRenderLoop(function() { bScene.render(); });
   scheduleHostStatePublish();
 
