@@ -59,7 +59,7 @@ def _normalize_state(state: dict[str, Any]) -> dict[str, Any]:
             "objects": [],
             "removed_objects": [],
         }
-    return {
+    normalized: dict[str, Any] = {
         "view": deepcopy(state.get("view")),
         "postprocess": deepcopy(state.get("postprocess")),
         "scale_bar": deepcopy(state.get("scale_bar")),
@@ -67,6 +67,10 @@ def _normalize_state(state: dict[str, Any]) -> dict[str, Any]:
         "objects": deepcopy(state.get("objects") or []),
         "removed_objects": deepcopy(state.get("removed_objects") or []),
     }
+    for key in ("selected", "gizmo_mode", "gizmos_visible"):
+        if state.get(key) is not None:
+            normalized[key] = state[key]
+    return normalized
 
 
 def _observe_widget_state(widget: Any) -> Any:
@@ -217,6 +221,18 @@ def apply_scene_state(
 
     for edit in norm.get("objects") or []:
         idx = edit.get("index")
+        created_in_editor = edit.get("created_in_editor", False)
+
+        if created_in_editor:
+            # Reconstruct editor-created objects (e.g. lights added in the editor)
+            new_obj: dict[str, Any] = {k: deepcopy(v) for k, v in edit.items() if k != "index" and k != "created_in_editor"}
+            node_type = edit.get("node_type")
+            if node_type == "light":
+                new_obj.setdefault("type", "light3d")
+                new_obj.setdefault("light_type", edit.get("light_type", "point"))
+            result.objects.append(new_obj)
+            continue
+
         if idx is None:
             continue
         try:
