@@ -516,6 +516,113 @@ function updateLightHelpers(state) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Material helpers
+// ---------------------------------------------------------------------------
+
+function defaultMaterialSpec(type) {
+  if (type === "pbr") {
+    return {
+      type: "pbr",
+      base_color: "#ffffff",
+      metallic: 0,
+      roughness: 1,
+      alpha: 1,
+      wireframe: false,
+      backface_culling: false,
+    };
+  }
+  return {
+    type: "standard",
+    diffuse: "#d9d9d9",
+    specular: "#000000",
+    alpha: 1,
+    wireframe: false,
+    backface_culling: true,
+  };
+}
+
+function editableMaterialSpec(target) {
+  if (!target || target.kind !== "mesh") return null;
+
+  // Try structured material first, fall back to legacy primitive fields
+  var existing = null;
+  if (target.primitive && target.primitive.material) {
+    existing = JSON.parse(JSON.stringify(target.primitive.material));
+  }
+  if (!existing) {
+    existing = {};
+  }
+  if (!existing.type) existing.type = "standard";
+
+  if (existing.type === "pbr") {
+    if (existing.base_color === undefined && existing.albedo !== undefined) existing.base_color = existing.albedo;
+    if (existing.base_color === undefined) existing.base_color = "#ffffff";
+    if (existing.metallic === undefined) existing.metallic = 0;
+    if (existing.roughness === undefined) existing.roughness = 1;
+  } else {
+    existing.type = "standard";
+    if (existing.diffuse === undefined) {
+      existing.diffuse = target.primitive && target.primitive.color ? target.primitive.color : "#d9d9d9";
+    }
+    if (existing.specular === undefined) {
+      existing.specular = target.primitive && target.primitive.specularity ? target.primitive.specularity : "#000000";
+    }
+  }
+
+  if (existing.alpha === undefined) {
+    existing.alpha = target.primitive && target.primitive.alpha !== undefined ? Number(target.primitive.alpha) : 1;
+  }
+  if (existing.wireframe === undefined) {
+    existing.wireframe = !!(target.primitive && target.primitive.wireframe);
+  }
+  if (existing.backface_culling === undefined) {
+    existing.backface_culling = true;
+  }
+
+  return existing;
+}
+
+function applyMaterialToEditorTarget(target, bScene) {
+  if (!target || target.kind !== "mesh" || !target.node) return;
+  var spec = target.primitive && target.primitive.material ? target.primitive.material : null;
+  if (!spec) return;
+
+  var B = window.BABYLON;
+  var materialName = (target.name || "mesh") + "-editor-mat";
+  var material;
+
+  if (spec.type === "pbr") {
+    material = new B.PBRMaterial(materialName, bScene);
+    material.albedoColor = color3(spec.base_color || "#ffffff", new B.Color3(1, 1, 1));
+    material.metallic = spec.metallic === undefined ? 0 : Number(spec.metallic);
+    material.roughness = spec.roughness === undefined ? 1 : Number(spec.roughness);
+    material.usePhysicalLightFalloff = false;
+  } else {
+    material = new B.StandardMaterial(materialName, bScene);
+    material.diffuseColor = color3(spec.diffuse || "#d9d9d9", new B.Color3(0.85, 0.85, 0.85));
+    material.specularColor = color3(spec.specular || "#000000", new B.Color3(0, 0, 0));
+  }
+
+  material.backFaceCulling = spec.backface_culling !== false;
+  if (spec.alpha !== undefined) {
+    material.alpha = Number(spec.alpha);
+    if (material.alpha < 1) material.needDepthPrePass = true;
+  }
+  if (spec.wireframe) material.wireframe = true;
+
+  // Dispose old material if it exists
+  if (target.node.material && target.node.material.dispose) {
+    target.node.material.dispose();
+  }
+  target.node.material = material;
+
+  // Also apply bounding box visibility
+  if (target.primitive && target.primitive.show_bounding_box !== undefined) {
+    target.node.showBoundingBox = !!target.primitive.show_bounding_box;
+  }
+}
+
 function defaultLightPosition(sceneBounds) {
   var radius = sceneBounds && sceneBounds.radius ? sceneBounds.radius : 1;
   var center = sceneBounds && sceneBounds.center ? sceneBounds.center : new window.BABYLON.Vector3(0, 0, 0);
@@ -916,7 +1023,10 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
       console.log("[Babylonian Editor] Selected target:", selectedTarget.id, selectedTarget.kind, selectedTarget.name);
       editorState.selectedId = selectedTarget.id;
       editorState.deferGizmoAttach = false;
-      if (selectedTarget.kind === "mesh") editorState.sectionOpen.meshes = true;
+      if (selectedTarget.kind === "mesh") {
+        editorState.sectionOpen.meshes = true;
+        editorState.sectionOpen.materials = true;
+      }
       if (selectedTarget.kind === "light") editorState.sectionOpen.lights = true;
       syncEditorGizmoState(editorState, camera, sceneBounds);
       updateEditorPanel();
@@ -976,6 +1086,31 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
             "<button type='button' data-role='mesh-mode' data-mode='scale' style='flex:1; min-width:0; border:0; border-radius:6px; background:#475569; color:white; padding:6px 10px; cursor:pointer;'>Scale</button>" +
             "<button type='button' data-role='mesh-reset' style='flex:1; min-width:0; border:0; border-radius:6px; background:#991b1b; color:white; padding:6px 10px; cursor:pointer;'>Reset</button>" +
           "</div>" +
+        "</div>" +
+      "</details>" +
+
+      // --- Materials section ---
+      "<details data-role='section-materials' style='margin-bottom:8px;'>" +
+        "<summary style='cursor:pointer; font-weight:700; color:#0f172a; text-decoration:underline;'>Materials</summary>" +
+        "<div style='margin-top:8px; margin-left:10px;'>" +
+          "<label style='display:block; margin-bottom:4px; color:#334155;'>Material type</label>" +
+          "<select data-role='material-type' style='width:100%; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff; font:inherit;'>" +
+            "<option value='standard'>standard</option>" +
+            "<option value='pbr'>pbr</option>" +
+          "</select>" +
+          "<label data-role='material-color-label' style='display:block; margin-bottom:4px; color:#334155;'>Diffuse color</label>" +
+          "<input data-role='material-color' type='color' value='#d9d9d9' style='width:100%; height:36px; margin-bottom:8px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; padding:2px;' />" +
+          "<label style='display:block; margin-bottom:4px; color:#334155;'>Alpha <span data-role='material-alpha-value'>1</span></label>" +
+          "<input data-role='material-alpha' type='range' min='0' max='1' step='0.01' value='1' style='width:100%; margin-bottom:8px;' />" +
+          "<div data-role='material-pbr-fields' style='display:none;'>" +
+            "<label style='display:block; margin-bottom:4px; color:#334155;'>Metallic <span data-role='material-metallic-value'>0</span></label>" +
+            "<input data-role='material-metallic' type='range' min='0' max='1' step='0.01' value='0' style='width:100%; margin-bottom:8px;' />" +
+            "<label style='display:block; margin-bottom:4px; color:#334155;'>Roughness <span data-role='material-roughness-value'>1</span></label>" +
+            "<input data-role='material-roughness' type='range' min='0' max='1' step='0.01' value='1' style='width:100%; margin-bottom:8px;' />" +
+          "</div>" +
+          "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='material-wireframe' type='checkbox' /> Wireframe</label>" +
+          "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='mesh-bounding-box' type='checkbox' /> Bounding box</label>" +
+          "<label style='display:flex; align-items:center; gap:6px; margin-bottom:6px; color:#334155;'><input data-role='material-backface' type='checkbox' checked /> Backface culling</label>" +
         "</div>" +
       "</details>" +
 
@@ -1047,12 +1182,39 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
       snapshotFilenameInput: uiLayer.querySelector("[data-role='snapshot-filename']"),
       snapshotFormatSelect: uiLayer.querySelector("[data-role='snapshot-format']"),
       snapshotSaveButton: uiLayer.querySelector("[data-role='snapshot-save']"),
+      materialSection: uiLayer.querySelector("[data-role='section-materials']"),
+      materialTypeSelect: uiLayer.querySelector("[data-role='material-type']"),
+      materialColorLabel: uiLayer.querySelector("[data-role='material-color-label']"),
+      materialColorInput: uiLayer.querySelector("[data-role='material-color']"),
+      materialAlphaSlider: uiLayer.querySelector("[data-role='material-alpha']"),
+      materialAlphaValue: uiLayer.querySelector("[data-role='material-alpha-value']"),
+      materialPbrFields: uiLayer.querySelector("[data-role='material-pbr-fields']"),
+      materialMetallicSlider: uiLayer.querySelector("[data-role='material-metallic']"),
+      materialMetallicValue: uiLayer.querySelector("[data-role='material-metallic-value']"),
+      materialRoughnessSlider: uiLayer.querySelector("[data-role='material-roughness']"),
+      materialRoughnessValue: uiLayer.querySelector("[data-role='material-roughness-value']"),
+      materialWireframeInput: uiLayer.querySelector("[data-role='material-wireframe']"),
+      meshBoundingBoxInput: uiLayer.querySelector("[data-role='mesh-bounding-box']"),
+      materialBackfaceInput: uiLayer.querySelector("[data-role='material-backface']"),
       stateText: uiLayer.querySelector("[data-role='state-json']"),
       copyButton: uiLayer.querySelector("[data-role='copy-state']"),
     };
     editorState.ui = ui;
 
     // --- Bind events ---
+
+    // Material editing helper: mutates spec, applies to mesh, publishes
+    function updateSelectedMaterial(mutator) {
+      var target = selectedMeshTarget(editorState);
+      if (!target) return;
+      var spec = editableMaterialSpec(target);
+      if (!spec) return;
+      mutator(spec, target);
+      target.primitive.material = spec;
+      applyMaterialToEditorTarget(target, bScene);
+      updateEditorPanel();
+      publishEditorState();
+    }
 
     // Mesh selection
     ui.meshSelect.addEventListener("change", function(evt) {
@@ -1082,6 +1244,83 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
       if (target.node.rotation) target.node.rotation = new B.Vector3(0, 0, 0);
       if (target.node.scaling) target.node.scaling = new B.Vector3(1, 1, 1);
       syncEditorGizmoState(editorState, camera, sceneBounds);
+      updateEditorPanel();
+      publishEditorState();
+    });
+
+    // --- Material controls ---
+
+    ui.materialTypeSelect.addEventListener("change", function(evt) {
+      updateSelectedMaterial(function(spec) {
+        var nextType = evt.target.value === "pbr" ? "pbr" : "standard";
+        var alpha = spec.alpha;
+        var wireframe = !!spec.wireframe;
+        var backface = spec.backface_culling !== false;
+        var prevColor = spec.type === "pbr" ? spec.base_color : spec.diffuse;
+        var next = defaultMaterialSpec(nextType);
+        next.alpha = alpha === undefined ? next.alpha : alpha;
+        next.wireframe = wireframe;
+        next.backface_culling = backface;
+        if (nextType === "pbr") {
+          next.base_color = prevColor || "#ffffff";
+        } else {
+          next.diffuse = prevColor || "#d9d9d9";
+        }
+        // Replace spec contents in-place
+        Object.keys(spec).forEach(function(key) { delete spec[key]; });
+        Object.keys(next).forEach(function(key) { spec[key] = next[key]; });
+      });
+    });
+
+    ui.materialColorInput.addEventListener("input", function(evt) {
+      updateSelectedMaterial(function(spec) {
+        if (spec.type === "pbr") {
+          spec.base_color = evt.target.value;
+        } else {
+          spec.diffuse = evt.target.value;
+        }
+      });
+    });
+
+    ui.materialAlphaSlider.addEventListener("input", function(evt) {
+      updateSelectedMaterial(function(spec) {
+        spec.alpha = Number(evt.target.value);
+      });
+    });
+
+    ui.materialMetallicSlider.addEventListener("input", function(evt) {
+      updateSelectedMaterial(function(spec) {
+        spec.type = "pbr";
+        spec.metallic = Number(evt.target.value);
+      });
+    });
+
+    ui.materialRoughnessSlider.addEventListener("input", function(evt) {
+      updateSelectedMaterial(function(spec) {
+        spec.type = "pbr";
+        spec.roughness = Number(evt.target.value);
+      });
+    });
+
+    ui.materialWireframeInput.addEventListener("change", function(evt) {
+      updateSelectedMaterial(function(spec) {
+        spec.wireframe = !!evt.target.checked;
+      });
+    });
+
+    ui.materialBackfaceInput.addEventListener("change", function(evt) {
+      updateSelectedMaterial(function(spec) {
+        spec.backface_culling = !!evt.target.checked;
+      });
+    });
+
+    ui.meshBoundingBoxInput.addEventListener("change", function(evt) {
+      var target = selectedMeshTarget(editorState);
+      if (!target) return;
+      target.primitive.show_bounding_box = !!evt.target.checked;
+      if (target.node && target.node.showBoundingBox !== undefined) {
+        target.node.showBoundingBox = !!evt.target.checked;
+      }
       updateEditorPanel();
       publishEditorState();
     });
@@ -1246,10 +1485,11 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
     });
 
     // Section toggle tracking
-    [ui.meshSection, ui.lightSection, ui.snapshotSection, ui.logSection].forEach(function(section) {
+    [ui.meshSection, ui.materialSection, ui.lightSection, ui.snapshotSection, ui.logSection].forEach(function(section) {
       if (!section) return;
       section.addEventListener("toggle", function() {
         editorState.sectionOpen.meshes = !!ui.meshSection.open;
+        if (ui.materialSection) editorState.sectionOpen.materials = !!ui.materialSection.open;
         editorState.sectionOpen.lights = !!ui.lightSection.open;
         editorState.sectionOpen.snapshot = !!ui.snapshotSection.open;
         editorState.sectionOpen.log = !!ui.logSection.open;
@@ -1420,6 +1660,12 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
           entry.rotation = target.node.rotation ? vectorToArray(target.node.rotation) : [0, 0, 0];
           entry.scaling = target.node.scaling ? vectorToArray(target.node.scaling) : [1, 1, 1];
         }
+        if (target.primitive && target.primitive.material) {
+          try { entry.material = JSON.parse(JSON.stringify(target.primitive.material)); } catch(e) {}
+        }
+        if (target.primitive && target.primitive.show_bounding_box !== undefined) {
+          entry.show_bounding_box = target.primitive.show_bounding_box === true;
+        }
         if (target.createdInEditor) entry.created_in_editor = true;
         return entry;
       }),
@@ -1460,6 +1706,7 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
 
     // Update section open states
     ui.meshSection.open = editorState.sectionOpen.meshes !== false;
+    if (ui.materialSection) ui.materialSection.open = editorState.sectionOpen.materials !== false;
     ui.lightSection.open = editorState.sectionOpen.lights !== false;
     ui.snapshotSection.open = editorState.sectionOpen.snapshot === true;
     ui.logSection.open = editorState.sectionOpen.log === true;
@@ -1514,6 +1761,31 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
       ui.intensitySlider.value = intensity;
       ui.intensityValue.textContent = Number(intensity).toFixed(2).replace(/\.?0+$/, "");
       ui.diffuseColorInput.value = selected.primitive.diffuse || "#ffffff";
+    }
+
+    // Update material controls from selected mesh
+    var meshTarget = selectedMeshTarget(editorState);
+    if (meshTarget && ui.materialTypeSelect) {
+      var matSpec = editableMaterialSpec(meshTarget);
+      if (matSpec) {
+        ui.materialTypeSelect.value = matSpec.type || "standard";
+        ui.materialColorLabel.textContent = matSpec.type === "pbr" ? "Base color" : "Diffuse color";
+        ui.materialColorInput.value = matSpec.type === "pbr"
+          ? (matSpec.base_color || "#ffffff")
+          : (matSpec.diffuse || "#d9d9d9");
+        ui.materialAlphaSlider.value = matSpec.alpha !== undefined ? matSpec.alpha : 1;
+        ui.materialAlphaValue.textContent = Number(matSpec.alpha !== undefined ? matSpec.alpha : 1).toFixed(2).replace(/\.?0+$/, "");
+        ui.materialPbrFields.style.display = matSpec.type === "pbr" ? "block" : "none";
+        if (matSpec.type === "pbr") {
+          ui.materialMetallicSlider.value = matSpec.metallic !== undefined ? matSpec.metallic : 0;
+          ui.materialMetallicValue.textContent = Number(matSpec.metallic !== undefined ? matSpec.metallic : 0).toFixed(2).replace(/\.?0+$/, "");
+          ui.materialRoughnessSlider.value = matSpec.roughness !== undefined ? matSpec.roughness : 1;
+          ui.materialRoughnessValue.textContent = Number(matSpec.roughness !== undefined ? matSpec.roughness : 1).toFixed(2).replace(/\.?0+$/, "");
+        }
+        ui.materialWireframeInput.checked = !!matSpec.wireframe;
+        ui.materialBackfaceInput.checked = matSpec.backface_culling !== false;
+        ui.meshBoundingBoxInput.checked = !!(meshTarget.primitive && meshTarget.primitive.show_bounding_box);
+      }
     }
 
     // Gizmo toggle button text
