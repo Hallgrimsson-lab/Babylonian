@@ -376,10 +376,10 @@ function syncEditorGizmoState(state, camera, sceneBounds) {
 
   if (state.deferGizmoAttach === true) {
     console.log("[Babylonian Editor] syncGizmo: deferred — detaching gizmo");
-    attachEditorTarget(state, null);
     state.gizmoManager.positionGizmoEnabled = false;
     state.gizmoManager.rotationGizmoEnabled = false;
     state.gizmoManager.scaleGizmoEnabled = false;
+    attachEditorTarget(state, null);
     return;
   }
 
@@ -402,10 +402,12 @@ function syncEditorGizmoState(state, camera, sceneBounds) {
     canScale: canScale,
   });
 
-  attachEditorTarget(state, visible ? target : null);
+  // Enable gizmo modes first, then attach — BabylonJS GizmoManager
+  // requires the gizmo to exist before attachment takes effect.
   state.gizmoManager.positionGizmoEnabled = visible && state.gizmoMode === "translate" && canTranslate;
   state.gizmoManager.rotationGizmoEnabled = visible && state.gizmoMode === "rotate" && canRotate;
   state.gizmoManager.scaleGizmoEnabled = visible && state.gizmoMode === "scale" && canScale;
+  attachEditorTarget(state, visible ? target : null);
 
   var gizmoScaleRatio = null;
   var targetBounds = editorTargetBounds(target, sceneBounds);
