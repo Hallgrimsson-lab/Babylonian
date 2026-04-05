@@ -311,20 +311,36 @@ function ensureEditorMode(state) {
 
 function attachEditorTarget(state, target) {
   if (!state || !state.gizmoManager) return;
+  var gm = state.gizmoManager;
   var node = target ? target.node : null;
+
+  // BabylonJS 5 GizmoManager: use attachedMesh property for AbstractMesh,
+  // attachToNode method (if available) for TransformNodes, or fall back to
+  // attaching individual gizmos directly.
   if (!node) {
-    // Detach: try both APIs
-    if (state.gizmoManager.attachToNode) state.gizmoManager.attachToNode(null);
-    else if (state.gizmoManager.attachToMesh) state.gizmoManager.attachToMesh(null);
+    // Detach
+    gm.attachedMesh = null;
+    if (gm.attachToNode) gm.attachToNode(null);
     return;
   }
-  // For Mesh nodes, use attachToMesh; for TransformNodes (lights), use attachToNode
-  if (node.getTotalVertices && state.gizmoManager.attachToMesh) {
-    state.gizmoManager.attachToMesh(node);
-  } else if (state.gizmoManager.attachToNode) {
-    state.gizmoManager.attachToNode(node);
-  } else if (state.gizmoManager.attachToMesh) {
-    state.gizmoManager.attachToMesh(node);
+
+  // If it's a real mesh (AbstractMesh), use the attachedMesh property
+  if (node.getTotalVertices) {
+    gm.attachedMesh = node;
+    return;
+  }
+
+  // For TransformNodes (light editor nodes), try attachToNode first
+  if (gm.attachToNode) {
+    gm.attachToNode(node);
+    return;
+  }
+
+  // Last resort: directly attach individual gizmos to the node
+  if (gm.gizmos) {
+    if (gm.gizmos.positionGizmo) gm.gizmos.positionGizmo.attachedNode = node;
+    if (gm.gizmos.rotationGizmo) gm.gizmos.rotationGizmo.attachedNode = node;
+    if (gm.gizmos.scaleGizmo) gm.gizmos.scaleGizmo.attachedNode = node;
   }
 }
 
