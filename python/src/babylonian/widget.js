@@ -1203,10 +1203,13 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
 
     // --- Bind events ---
 
-    // Material editing helper: mutates spec, applies to mesh, publishes
+    // Material editing helper: always targets the mesh dropdown's value, not
+    // the global selection (which could be a light).
     function updateSelectedMaterial(mutator) {
-      var target = selectedMeshTarget(editorState);
-      if (!target) return;
+      var meshId = ui.meshSelect.value;
+      if (!meshId) return;
+      var target = editorState.targets.find(function(t) { return t.id === meshId; }) || null;
+      if (!target || target.kind !== "mesh") return;
       var spec = editableMaterialSpec(target);
       if (!spec) return;
       mutator(spec, target);
@@ -1225,9 +1228,14 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
       updateEditorPanel();
     });
 
-    // Mesh mode buttons (move/rotate/scale)
+    // Mesh mode buttons (move/rotate/scale) — always target the mesh dropdown's value
     ui.meshModeButtons.forEach(function(button) {
       button.addEventListener("click", function() {
+        var meshId = ui.meshSelect.value;
+        if (meshId) {
+          editorState.selectedId = meshId;
+          editorState.deferGizmoAttach = false;
+        }
         editorState.gizmoMode = button.getAttribute("data-mode");
         editorState.sectionOpen.meshes = true;
         syncEditorGizmoState(editorState, camera, sceneBounds);
@@ -1235,9 +1243,10 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
       });
     });
 
-    // Mesh reset
+    // Mesh reset — targets the mesh dropdown's value
     ui.meshResetButton.addEventListener("click", function() {
-      var target = selectedMeshTarget(editorState);
+      var meshId = ui.meshSelect.value;
+      var target = meshId ? editorState.targets.find(function(t) { return t.id === meshId && t.kind === "mesh"; }) : null;
       if (!target || !target.originalPrimitive) return;
       // Reset position/rotation/scaling from original
       if (target.node.position) target.node.position = new B.Vector3(0, 0, 0);
@@ -1315,7 +1324,8 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
     });
 
     ui.meshBoundingBoxInput.addEventListener("change", function(evt) {
-      var target = selectedMeshTarget(editorState);
+      var meshId = ui.meshSelect.value;
+      var target = meshId ? editorState.targets.find(function(t) { return t.id === meshId && t.kind === "mesh"; }) : null;
       if (!target) return;
       target.primitive.show_bounding_box = !!evt.target.checked;
       if (target.node && target.node.showBoundingBox !== undefined) {
@@ -1334,9 +1344,14 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
       updateEditorPanel();
     });
 
-    // Light mode buttons
+    // Light mode buttons — always target the light dropdown's value
     ui.lightModeButtons.forEach(function(button) {
       button.addEventListener("click", function() {
+        var lightId = ui.lightSelect.value;
+        if (lightId) {
+          editorState.selectedId = lightId;
+          editorState.deferGizmoAttach = false;
+        }
         editorState.gizmoMode = button.getAttribute("data-mode");
         editorState.sectionOpen.lights = true;
         syncEditorGizmoState(editorState, camera, sceneBounds);
@@ -1763,8 +1778,11 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
       ui.diffuseColorInput.value = selected.primitive.diffuse || "#ffffff";
     }
 
-    // Update material controls from selected mesh
-    var meshTarget = selectedMeshTarget(editorState);
+    // Update material controls from mesh dropdown target (not global selection)
+    var meshDropdownId = ui.meshSelect.value;
+    var meshTarget = meshDropdownId
+      ? editorState.targets.find(function(t) { return t.id === meshDropdownId && t.kind === "mesh"; }) || null
+      : null;
     if (meshTarget && ui.materialTypeSelect) {
       var matSpec = editableMaterialSpec(meshTarget);
       if (matSpec) {
