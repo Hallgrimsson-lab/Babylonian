@@ -311,18 +311,14 @@ function ensureEditorMode(state) {
 
 function attachEditorTarget(state, target) {
   if (!state || !state.gizmoManager) return;
-  var node = target ? target.node : null;
-  if (!node) {
-    if (state.gizmoManager.attachToNode) state.gizmoManager.attachToNode(null);
-    else if (state.gizmoManager.attachToMesh) state.gizmoManager.attachToMesh(null);
+
+  if (state.gizmoManager.attachToNode) {
+    state.gizmoManager.attachToNode(target ? target.node : null);
     return;
   }
-  if (node.getTotalVertices && state.gizmoManager.attachToMesh) {
-    state.gizmoManager.attachToMesh(node);
-  } else if (state.gizmoManager.attachToNode) {
-    state.gizmoManager.attachToNode(node);
-  } else if (state.gizmoManager.attachToMesh) {
-    state.gizmoManager.attachToMesh(node);
+
+  if (state.gizmoManager.attachToMesh) {
+    state.gizmoManager.attachToMesh(target ? target.node : null);
   }
 }
 
@@ -374,10 +370,10 @@ function syncEditorGizmoState(state, camera, sceneBounds) {
 
   if (state.deferGizmoAttach === true) {
     console.log("[Babylonian Editor] syncGizmo: deferred — detaching gizmo");
+    attachEditorTarget(state, null);
     state.gizmoManager.positionGizmoEnabled = false;
     state.gizmoManager.rotationGizmoEnabled = false;
     state.gizmoManager.scaleGizmoEnabled = false;
-    attachEditorTarget(state, null);
     return;
   }
 
