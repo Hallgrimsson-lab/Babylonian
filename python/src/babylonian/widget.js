@@ -363,17 +363,16 @@ function editorTargetBounds(target, sceneBounds) {
 }
 
 function syncEditorGizmoState(state, camera, sceneBounds) {
-  if (!state || !state.gizmoManager) {
-    console.log("[Babylonian Editor] syncGizmo: no state or no gizmoManager", !!state, state && !!state.gizmoManager);
-    return;
-  }
+  if (!state || !state.gizmoManager) return;
+
+  var gm = state.gizmoManager;
 
   if (state.deferGizmoAttach === true) {
-    console.log("[Babylonian Editor] syncGizmo: deferred — detaching gizmo");
-    attachEditorTarget(state, null);
-    state.gizmoManager.positionGizmoEnabled = false;
-    state.gizmoManager.rotationGizmoEnabled = false;
-    state.gizmoManager.scaleGizmoEnabled = false;
+    // Detach and disable all gizmos
+    gm.positionGizmoEnabled = false;
+    gm.rotationGizmoEnabled = false;
+    gm.scaleGizmoEnabled = false;
+    detachAllGizmos(gm);
     return;
   }
 
@@ -385,23 +384,36 @@ function syncEditorGizmoState(state, camera, sceneBounds) {
   var canRotate = !!target && supportedModes.indexOf("rotate") !== -1;
   var canScale = !!target && supportedModes.indexOf("scale") !== -1;
 
-  console.log("[Babylonian Editor] syncGizmo:", {
-    targetId: target ? target.id : null,
-    targetKind: target ? target.kind : null,
-    targetNodeType: target && target.node ? target.node.getClassName() : null,
-    visible: visible,
-    mode: state.gizmoMode,
-    canTranslate: canTranslate,
-    canRotate: canRotate,
-    canScale: canScale,
-  });
+  var wantPos   = visible && state.gizmoMode === "translate" && canTranslate;
+  var wantRot   = visible && state.gizmoMode === "rotate"    && canRotate;
+  var wantScale = visible && state.gizmoMode === "scale"     && canScale;
 
-  // Attach first, then enable gizmo modes
-  attachEditorTarget(state, visible ? target : null);
-  state.gizmoManager.positionGizmoEnabled = visible && state.gizmoMode === "translate" && canTranslate;
-  state.gizmoManager.rotationGizmoEnabled = visible && state.gizmoMode === "rotate" && canRotate;
-  state.gizmoManager.scaleGizmoEnabled = visible && state.gizmoMode === "scale" && canScale;
+  // Detach any existing gizmos before changing modes to ensure clean switch
+  detachAllGizmos(gm);
 
+  // Enable only the requested gizmo mode (disabling the others)
+  gm.positionGizmoEnabled = wantPos;
+  gm.rotationGizmoEnabled = wantRot;
+  gm.scaleGizmoEnabled    = wantScale;
+
+  // Attach the active gizmo directly to the target node.
+  // Use attachedMesh for Mesh nodes, attachedNode for TransformNodes (lights).
+  var attachNode = (wantPos || wantRot || wantScale) && target ? target.node : null;
+  if (attachNode && gm.gizmos) {
+    var isMesh = !!attachNode.getTotalVertices;
+    var g = gm.gizmos;
+    if (isMesh) {
+      if (g.positionGizmo) g.positionGizmo.attachedMesh = attachNode;
+      if (g.rotationGizmo) g.rotationGizmo.attachedMesh = attachNode;
+      if (g.scaleGizmo)    g.scaleGizmo.attachedMesh = attachNode;
+    } else {
+      if (g.positionGizmo) g.positionGizmo.attachedNode = attachNode;
+      if (g.rotationGizmo) g.rotationGizmo.attachedNode = attachNode;
+      if (g.scaleGizmo)    g.scaleGizmo.attachedNode = attachNode;
+    }
+  }
+
+  // Scale gizmos relative to target/scene size
   var gizmoScaleRatio = null;
   var targetBounds = editorTargetBounds(target, sceneBounds);
   var sceneRadius = sceneBounds && sceneBounds.radius ? sceneBounds.radius : 1;
@@ -418,16 +430,25 @@ function syncEditorGizmoState(state, camera, sceneBounds) {
     gizmoScaleRatio = Math.max(sceneBounds.radius * 0.006, 0.004);
   }
 
-  if (state.gizmoManager.gizmos) {
-    if (state.gizmoManager.gizmos.positionGizmo && gizmoScaleRatio !== null)
-      state.gizmoManager.gizmos.positionGizmo.scaleRatio = gizmoScaleRatio;
-    if (state.gizmoManager.gizmos.rotationGizmo && gizmoScaleRatio !== null)
-      state.gizmoManager.gizmos.rotationGizmo.scaleRatio = gizmoScaleRatio;
-    if (state.gizmoManager.gizmos.scaleGizmo) {
-      if (gizmoScaleRatio !== null) state.gizmoManager.gizmos.scaleGizmo.scaleRatio = gizmoScaleRatio;
-      state.gizmoManager.gizmos.scaleGizmo.uniformScaling = true;
+  if (gm.gizmos) {
+    if (gm.gizmos.positionGizmo && gizmoScaleRatio !== null)
+      gm.gizmos.positionGizmo.scaleRatio = gizmoScaleRatio;
+    if (gm.gizmos.rotationGizmo && gizmoScaleRatio !== null)
+      gm.gizmos.rotationGizmo.scaleRatio = gizmoScaleRatio;
+    if (gm.gizmos.scaleGizmo) {
+      if (gizmoScaleRatio !== null) gm.gizmos.scaleGizmo.scaleRatio = gizmoScaleRatio;
+      gm.gizmos.scaleGizmo.uniformScaling = true;
     }
   }
+}
+
+// Detach all individual gizmos to ensure clean visual state on mode switch
+function detachAllGizmos(gm) {
+  if (!gm || !gm.gizmos) return;
+  var g = gm.gizmos;
+  if (g.positionGizmo) { g.positionGizmo.attachedMesh = null; g.positionGizmo.attachedNode = null; }
+  if (g.rotationGizmo) { g.rotationGizmo.attachedMesh = null; g.rotationGizmo.attachedNode = null; }
+  if (g.scaleGizmo)    { g.scaleGizmo.attachedMesh = null; g.scaleGizmo.attachedNode = null; }
 }
 
 // ---------------------------------------------------------------------------
@@ -1883,7 +1904,17 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
       updateLightHelpers(editorState);
     });
   }
-  engine.runRenderLoop(function() { bScene.render(); });
+  engine.runRenderLoop(function() {
+    bScene.render();
+    // Explicitly render the GizmoManager's utility layer — in the anywidget
+    // context the automatic UtilityLayerRenderer observer doesn't fire.
+    if (editorState && editorState.gizmoManager) {
+      var ul = editorState.gizmoManager.utilityLayer || editorState.gizmoManager._defaultUtilityLayer;
+      if (ul && ul.utilityLayerScene) {
+        ul.render();
+      }
+    }
+  });
   scheduleHostStatePublish();
 
   // "Save scene state" button (non-editor mode only)
