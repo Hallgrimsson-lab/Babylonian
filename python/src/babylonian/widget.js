@@ -372,7 +372,6 @@ function syncEditorGizmoState(state, camera, sceneBounds) {
     gm.positionGizmoEnabled = false;
     gm.rotationGizmoEnabled = false;
     gm.scaleGizmoEnabled = false;
-    detachAllGizmos(gm);
     return;
   }
 
@@ -388,15 +387,18 @@ function syncEditorGizmoState(state, camera, sceneBounds) {
   var wantRot   = visible && state.gizmoMode === "rotate"    && canRotate;
   var wantScale = visible && state.gizmoMode === "scale"     && canScale;
 
-  // Detach any existing gizmos before changing modes to ensure clean switch
-  detachAllGizmos(gm);
+  // Disable all gizmo modes first — this disposes old gizmo objects and their
+  // utility-layer meshes, ensuring a clean visual switch between modes.
+  gm.positionGizmoEnabled = false;
+  gm.rotationGizmoEnabled = false;
+  gm.scaleGizmoEnabled    = false;
 
-  // Enable only the requested gizmo mode (disabling the others)
+  // Enable only the requested gizmo mode (creates a fresh gizmo object)
   gm.positionGizmoEnabled = wantPos;
   gm.rotationGizmoEnabled = wantRot;
   gm.scaleGizmoEnabled    = wantScale;
 
-  // Attach the active gizmo directly to the target node.
+  // Attach the newly created gizmo directly to the target node.
   // Use attachedMesh for Mesh nodes, attachedNode for TransformNodes (lights).
   var attachNode = (wantPos || wantRot || wantScale) && target ? target.node : null;
   if (attachNode && gm.gizmos) {
@@ -440,15 +442,6 @@ function syncEditorGizmoState(state, camera, sceneBounds) {
       gm.gizmos.scaleGizmo.uniformScaling = true;
     }
   }
-}
-
-// Detach all individual gizmos to ensure clean visual state on mode switch
-function detachAllGizmos(gm) {
-  if (!gm || !gm.gizmos) return;
-  var g = gm.gizmos;
-  if (g.positionGizmo) { g.positionGizmo.attachedMesh = null; g.positionGizmo.attachedNode = null; }
-  if (g.rotationGizmo) { g.rotationGizmo.attachedMesh = null; g.rotationGizmo.attachedNode = null; }
-  if (g.scaleGizmo)    { g.scaleGizmo.attachedMesh = null; g.scaleGizmo.attachedNode = null; }
 }
 
 // ---------------------------------------------------------------------------
@@ -1904,11 +1897,15 @@ function buildScene(el, payload, width, height, elementId, modelRef) {
       updateLightHelpers(editorState);
     });
   }
+  var _renderFrameCount = 0;
   engine.runRenderLoop(function() {
     bScene.render();
+    _renderFrameCount++;
     // Explicitly render the GizmoManager's utility layer — in the anywidget
     // context the automatic UtilityLayerRenderer observer doesn't fire.
-    if (editorState && editorState.gizmoManager) {
+    // Skip the first frame to avoid clearing the canvas before the main scene
+    // has fully rendered.
+    if (_renderFrameCount > 1 && editorState && editorState.gizmoManager) {
       var ul = editorState.gizmoManager.utilityLayer || editorState.gizmoManager._defaultUtilityLayer;
       if (ul && ul.utilityLayerScene) {
         ul.render();
