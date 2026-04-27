@@ -14,7 +14,10 @@ HTMLWidgets.widget({
     el.style.position = "relative";
 
     // Create a Babylon.js engine
-    var engine = new BABYLON.Engine(canvas, true);
+    var engine = new BABYLON.Engine(canvas, true, {
+      preserveDrawingBuffer: true,
+      stencil: true
+    });
 
     var defaultSceneBackground = new BABYLON.Color4(0.98, 0.98, 0.98, 1);
 
@@ -2238,6 +2241,36 @@ HTMLWidgets.widget({
       return meshTargets[0];
     }
 
+    function selectedLightTarget(state) {
+      if (!state || !state.targets || !state.targets.length) {
+        return null;
+      }
+
+      var lightTargets = editorTargetsByKind(state, "light");
+      if (!lightTargets.length) {
+        return null;
+      }
+
+      if (state.ui && state.ui.lightSelect && state.ui.lightSelect.value) {
+        var selectedLight = null;
+        lightTargets.forEach(function(target) {
+          if (target.id === state.ui.lightSelect.value) {
+            selectedLight = target;
+          }
+        });
+        if (selectedLight) {
+          return selectedLight;
+        }
+      }
+
+      var active = selectedEditorTarget(state);
+      if (active && active.kind === "light") {
+        return active;
+      }
+
+      return lightTargets[0];
+    }
+
     function editorTargetsByKind(state, kind) {
       if (!state || !state.targets || !state.targets.length) {
         return [];
@@ -2447,6 +2480,62 @@ HTMLWidgets.widget({
       }
 
       return false;
+    }
+
+    function pickedMeshIsHelper(mesh) {
+      var current = mesh;
+      while (current) {
+        if (current.metadata && current.metadata.babylonianHelper) {
+          return true;
+        }
+        current = current.parent;
+      }
+      return false;
+    }
+
+    function resolveEditorPickTarget(state, pickInfo) {
+      if (!state || !state.targets || !state.targets.length || !pickInfo || !pickInfo.pickedMesh) {
+        return null;
+      }
+
+      var pickInfos = [];
+      if (scene.multiPick) {
+        try {
+          pickInfos = scene.multiPick(scene.pointerX, scene.pointerY) || [];
+        } catch (err) {
+          pickInfos = [];
+        }
+      }
+      if (!pickInfos.length) {
+        pickInfos = [pickInfo];
+      }
+
+      var helperTarget = null;
+      for (var pickIndex = 0; pickIndex < pickInfos.length; pickIndex += 1) {
+        var candidatePick = pickInfos[pickIndex];
+        if (!candidatePick || !candidatePick.hit || !candidatePick.pickedMesh) {
+          continue;
+        }
+
+        var candidateTarget = null;
+        state.targets.forEach(function(target) {
+          if (!candidateTarget && editorTargetMatchesPickedMesh(target, candidatePick.pickedMesh)) {
+            candidateTarget = target;
+          }
+        });
+        if (!candidateTarget) {
+          continue;
+        }
+
+        if (!pickedMeshIsHelper(candidatePick.pickedMesh)) {
+          return candidateTarget;
+        }
+        if (!helperTarget) {
+          helperTarget = candidateTarget;
+        }
+      }
+
+      return helperTarget;
     }
 
     function targetSelectionSection(target) {
@@ -3296,6 +3385,7 @@ HTMLWidgets.widget({
           state.sectionOpen.materials = true;
           syncEditorGizmoState(state);
           updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+          publishSceneEditorState(state);
         });
 
         state.ui.meshResetButton.addEventListener("click", function() {
@@ -3412,6 +3502,7 @@ HTMLWidgets.widget({
           state.sectionOpen.lights = true;
           syncEditorGizmoState(state);
           updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+          publishSceneEditorState(state);
         });
 
         state.ui.lightAddButton.addEventListener("click", function() {
@@ -3430,19 +3521,32 @@ HTMLWidgets.widget({
 
         state.ui.meshModeButtons.forEach(function(button) {
           button.addEventListener("click", function() {
+            var meshTarget = selectedMeshTarget(state);
+            if (meshTarget) {
+              state.selectedId = meshTarget.id;
+            }
+            state.deferGizmoAttach = false;
             state.gizmoMode = button.getAttribute("data-mode");
             state.sectionOpen.meshes = true;
+            state.sectionOpen.materials = true;
             syncEditorGizmoState(state);
             updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+            publishSceneEditorState(state);
           });
         });
 
         state.ui.lightModeButtons.forEach(function(button) {
           button.addEventListener("click", function() {
+            var lightTarget = selectedLightTarget(state);
+            if (lightTarget) {
+              state.selectedId = lightTarget.id;
+            }
+            state.deferGizmoAttach = false;
             state.gizmoMode = button.getAttribute("data-mode");
             state.sectionOpen.lights = true;
             syncEditorGizmoState(state);
             updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+            publishSceneEditorState(state);
           });
         });
 
@@ -3565,16 +3669,21 @@ HTMLWidgets.widget({
             return;
           }
           setSnapshotPreviewVisible(state, false);
-          emitHostEvent(
-            "snapshot_request",
-            {
-              filename: state.ui.snapshotFilenameInput.value || "scene.png",
-              format: state.ui.snapshotFormatSelect.value || "png",
-              vwidth: engine.getRenderWidth ? engine.getRenderWidth() : canvas.width,
-              vheight: engine.getRenderHeight ? engine.getRenderHeight() : canvas.height
-            },
-            state.widgetId
-          );
+          window.requestAnimationFrame(function() {
+            window.requestAnimationFrame(function() {
+              emitHostEvent(
+                "snapshot_request",
+                {
+                  filename: state.ui.snapshotFilenameInput.value || "scene.png",
+                  format: state.ui.snapshotFormatSelect.value || "png",
+                  vwidth: engine.getRenderWidth ? engine.getRenderWidth() : canvas.width,
+                  vheight: engine.getRenderHeight ? engine.getRenderHeight() : canvas.height,
+                  image_data: canvas.toDataURL("image/png")
+                },
+                state.widgetId
+              );
+            });
+          });
         });
 
         state.ui.snapshotFormatSelect.addEventListener("change", function(evt) {
@@ -4502,12 +4611,7 @@ HTMLWidgets.widget({
             return;
           }
 
-          var selectedTarget = null;
-          editorState.targets.forEach(function(target) {
-            if (!selectedTarget && editorTargetMatchesPickedMesh(target, pickInfo.pickedMesh)) {
-              selectedTarget = target;
-            }
-          });
+          var selectedTarget = resolveEditorPickTarget(editorState, pickInfo);
           if (!selectedTarget) {
             return;
           }
@@ -5544,8 +5648,10 @@ HTMLWidgets.widget({
     }
 
     // Render the scene
+    var _renderFrameCount = 0;
     engine.runRenderLoop(function () {
       scene.render();
+      _renderFrameCount++;
       if (axisLabelState.length) {
         updateAxisLabels();
       }
@@ -5553,6 +5659,17 @@ HTMLWidgets.widget({
       applySceneClipping(currentSceneOptions);
       if (activeInteractionState && activeInteractionState.mode === "edit_scene3d") {
         updateLightHelpers(activeInteractionState);
+      }
+      // Explicitly render the GizmoManager's utility layer.  In some
+      // contexts (e.g. anywidget) the automatic UtilityLayerRenderer
+      // observer doesn't fire, so gizmos attach but aren't visible.
+      // Skip the first frame so the main scene has fully rendered first.
+      if (_renderFrameCount > 1 && activeInteractionState && activeInteractionState.gizmoManager) {
+        var ul = activeInteractionState.gizmoManager.utilityLayer
+              || activeInteractionState.gizmoManager._defaultUtilityLayer;
+        if (ul && ul.utilityLayerScene) {
+          ul.render();
+        }
       }
     });
 
@@ -5758,7 +5875,7 @@ HTMLWidgets.widget({
 
         initializeInteraction(interaction, primaryMesh, editableTargets);
 
-        if (sceneUpdated && pendingImports === 0) {
+        if ((sceneUpdated || objects.length === 0) && pendingImports === 0) {
           frameScene();
           applyViewOptions(currentSceneBounds, currentSceneOptions);
           renderAxes(currentSceneBounds, currentSceneOptions);

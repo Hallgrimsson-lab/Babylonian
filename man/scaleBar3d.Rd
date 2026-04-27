@@ -5,7 +5,8 @@
 \title{Add a 2D scale bar overlay to the current scene}
 \usage{
 scaleBar3d(
-  length,
+  x = NULL,
+  length = NULL,
   units = NULL,
   custom_units = NULL,
   label = NULL,

@@ -177,8 +177,16 @@ points3d <- function(
   axes = TRUE,
   nticks = 5
 ) {
+  base <- resolve_scene_base(x)
+  if (!is.null(base)) {
+    if (is.null(y) || !is.null(z)) {
+      stop("When using `points3d()` in a pipe, supply the points as a single 3-column matrix via the next argument.", call. = FALSE)
+    }
+    x <- y
+    y <- NULL
+  }
   points <- as_babylon_points(xyz_matrix(x, y, z), color = color, size = size, alpha = alpha)
-  append_current_scene(points, add = add, axes = axes, nticks = nticks)
+  append_scene_objects(list(points), add = add, axes = axes, nticks = nticks, base = base)
 }
 
 # Babylon spheres read larger than rgl spheres for the same nominal radius, so
@@ -215,6 +223,14 @@ spheres3d <- function(
   axes = TRUE,
   nticks = 5
 ) {
+  base <- resolve_scene_base(x)
+  if (!is.null(base)) {
+    if (is.null(y) || !is.null(z)) {
+      stop("When using `spheres3d()` in a pipe, supply the point coordinates as a single 3-column matrix via the next argument.", call. = FALSE)
+    }
+    x <- y
+    y <- NULL
+  }
   points <- xyz_matrix(x, y, z)
   color <- normalize_point_colors(color, nrow(points))
   radius <- as.numeric(radius[[1]]) * rgl_sphere_radius_factor()
@@ -228,7 +244,7 @@ spheres3d <- function(
     specularity = normalize_babylon_specularity(specularity)
   )
 
-  append_current_scene(spheres, add = add, axes = axes, nticks = nticks)
+  append_scene_objects(list(spheres), add = add, axes = axes, nticks = nticks, base = base)
 }
 
 #' Render connected 3D line segments
@@ -259,6 +275,14 @@ segments3d <- function(
   axes = TRUE,
   nticks = 5
 ) {
+  base <- resolve_scene_base(x)
+  if (!is.null(base)) {
+    if (is.null(y) || !is.null(z)) {
+      stop("When using `segments3d()` in a pipe, supply the segment points as a single 3-column matrix via the next argument.", call. = FALSE)
+    }
+    x <- y
+    y <- NULL
+  }
   points <- xyz_matrix(x, y, z)
 
   if (nrow(points) %% 2L != 0L) {
@@ -276,7 +300,7 @@ segments3d <- function(
     class = c("babylon_segments", "list")
   )
 
-  append_current_scene(segments, add = add, axes = axes, nticks = nticks)
+  append_scene_objects(list(segments), add = add, axes = axes, nticks = nticks, base = base)
 }
 
 #' Render connected 3D lines
@@ -306,6 +330,14 @@ lines3d <- function(
   axes = TRUE,
   nticks = 5
 ) {
+  base <- resolve_scene_base(x)
+  if (!is.null(base)) {
+    if (is.null(y) || !is.null(z)) {
+      stop("When using `lines3d()` in a pipe, supply the line points as a single 3-column matrix via the next argument.", call. = FALSE)
+    }
+    x <- y
+    y <- NULL
+  }
   points <- xyz_matrix(x, y, z)
   if (nrow(points) < 2L) {
     stop("`lines3d()` requires at least two points.", call. = FALSE)
@@ -322,7 +354,7 @@ lines3d <- function(
     class = c("babylon_lines", "list")
   )
 
-  append_current_scene(lines, add = add, axes = axes, nticks = nticks)
+  append_scene_objects(list(lines), add = add, axes = axes, nticks = nticks, base = base)
 }
 
 #' Render lightweight projected 3D text labels
@@ -349,6 +381,14 @@ text3d <- function(
   axes = TRUE,
   nticks = 5
 ) {
+  base <- resolve_scene_base(x)
+  if (!is.null(base)) {
+    if (is.null(y) || !is.null(z)) {
+      stop("When using `text3d()` in a pipe, supply the label points as a single 3-column matrix via the next argument.", call. = FALSE)
+    }
+    x <- y
+    y <- NULL
+  }
   points <- xyz_matrix(x, y, z)
   texts <- as.character(texts)
 
@@ -370,7 +410,7 @@ text3d <- function(
     class = c("babylon_text", "list")
   )
 
-  append_current_scene(labels, add = add, axes = axes, nticks = nticks)
+  append_scene_objects(list(labels), add = add, axes = axes, nticks = nticks, base = base)
 }
 
 #' Add rgl-style scene titles and axis labels
@@ -384,20 +424,13 @@ text3d <- function(
 #'   `add = FALSE` to start a fresh empty scene carrying only the title.
 #'
 #' @export
-title3d <- function(main = NULL, sub = NULL, xlab = NULL, ylab = NULL, zlab = NULL, color = "black", cex = 1, add = TRUE) {
-  scene_spec <- current_scene_spec()
-
-  if (!isTRUE(add) || is.null(scene_spec)) {
-    scene_spec <- list(
-      objects = list(),
-      scene = list(
-        axes = TRUE,
-        nticks = 5L,
-        view = serialize_par3d(.babylon_state$par3d)
-      )
-    )
+title3d <- function(x = NULL, main = NULL, sub = NULL, xlab = NULL, ylab = NULL, zlab = NULL, color = "black", cex = 1, add = TRUE) {
+  base <- resolve_scene_base(x)
+  if (is.null(base) && !is.null(x) && is.null(main)) {
+    main <- x
   }
 
+  scene_spec <- resolve_scene_spec(add = add, axes = TRUE, nticks = 5, base = base)
   scene_spec$scene$title <- normalize_scene_title(list(
     main = main,
     sub = sub,
@@ -408,8 +441,7 @@ title3d <- function(main = NULL, sub = NULL, xlab = NULL, ylab = NULL, zlab = NU
     cex = cex
   ))
 
-  .babylon_state$current_scene <- scene_spec
-  babylon(scene_spec$objects, scene = scene_spec$scene)
+  render_scene_spec(scene_spec, base = base)
 }
 
 #' Add a 2D scale bar overlay to the current scene
@@ -427,20 +459,13 @@ title3d <- function(main = NULL, sub = NULL, xlab = NULL, ylab = NULL, zlab = NU
 #'   `add = FALSE` to start a fresh empty scene carrying only the scale bar.
 #'
 #' @export
-scaleBar3d <- function(length, units = NULL, custom_units = NULL, label = NULL, position = "bottomright", add = TRUE) {
-  scene_spec <- current_scene_spec()
-
-  if (!isTRUE(add) || is.null(scene_spec)) {
-    scene_spec <- list(
-      objects = list(),
-      scene = list(
-        axes = TRUE,
-        nticks = 5L,
-        view = serialize_par3d(.babylon_state$par3d)
-      )
-    )
+scaleBar3d <- function(x = NULL, length = NULL, units = NULL, custom_units = NULL, label = NULL, position = "bottomright", add = TRUE) {
+  base <- resolve_scene_base(x)
+  if (is.null(base) && is.null(length) && !is.null(x)) {
+    length <- x
   }
 
+  scene_spec <- resolve_scene_spec(add = add, axes = TRUE, nticks = 5, base = base)
   scene_spec$scene$scale_bar <- normalize_scene_scale_bar(list(
     enabled = TRUE,
     length = length,
@@ -450,8 +475,7 @@ scaleBar3d <- function(length, units = NULL, custom_units = NULL, label = NULL, 
     position = position
   ))
 
-  .babylon_state$current_scene <- scene_spec
-  babylon(scene_spec$objects, scene = scene_spec$scene)
+  render_scene_spec(scene_spec, base = base)
 }
 
 #' Render one or more clipping-style planes
@@ -477,6 +501,14 @@ scaleBar3d <- function(length, units = NULL, custom_units = NULL, label = NULL, 
 #'
 #' @export
 planes3d <- function(a, b = NULL, c = NULL, d = 0, ..., color = "gray70", alpha = 0.4, size = NULL, add = TRUE, axes = TRUE, nticks = 5) {
+  base <- resolve_scene_base(a)
+  if (!is.null(base)) {
+    if (is.null(b) || !is.null(c)) {
+      stop("When using `planes3d()` in a pipe, supply the plane coefficients or point matrix via the next argument.", call. = FALSE)
+    }
+    a <- b
+    b <- NULL
+  }
   coeffs <- plane_coefficients(a, b = b, c = c, d = d)
   planes <- list(
     type = "planes3d",
@@ -486,7 +518,7 @@ planes3d <- function(a, b = NULL, c = NULL, d = 0, ..., color = "gray70", alpha 
     size = if (is.null(size)) NULL else as.numeric(size[[1]])
   )
 
-  append_current_scene(planes, add = add, axes = axes, nticks = nticks)
+  append_scene_objects(list(planes), add = add, axes = axes, nticks = nticks, base = base)
 }
 
 #' Shade a 3D surface or mesh
@@ -494,7 +526,10 @@ planes3d <- function(a, b = NULL, c = NULL, d = 0, ..., color = "gray70", alpha 
 #' This mirrors the feel of `rgl::shade3d()` by adding a shaded surface object
 #' to the current scene by default.
 #'
-#' @param x A `mesh3d`, `babylon_mesh`, or compatible Babylonian mesh object.
+#' @param x A `mesh3d`, `babylon_mesh`, compatible Babylonian mesh object, or a
+#'   Babylonian htmlwidget / `babylon_scene` when using `shade3d()` in a pipe.
+#' @param mesh Optional mesh to add when `x` is an existing Babylonian
+#'   htmlwidget or `babylon_scene`, for example `plot3d(base) |> shade3d(mesh)`.
 #' @param color Optional surface color.
 #' @param alpha Optional surface opacity.
 #' @param specularity Optional surface specularity.
@@ -508,6 +543,7 @@ planes3d <- function(a, b = NULL, c = NULL, d = 0, ..., color = "gray70", alpha 
 #' @export
 shade3d <- function(
   x,
+  mesh = NULL,
   color = NULL,
   alpha = NULL,
   specularity = "black",
@@ -516,26 +552,48 @@ shade3d <- function(
   nticks = 5,
   ...
 ) {
-  if (inherits(x, "mesh3d")) {
+  base <- NULL
+  target <- x
+
+  if (inherits(x, "htmlwidget") || inherits(x, "babylon_scene")) {
+    if (is.null(mesh)) {
+      stop("When `x` is a Babylonian htmlwidget or `babylon_scene`, supply the mesh to add via `mesh`.", call. = FALSE)
+    }
+    base <- x
+    target <- mesh
+  }
+
+  if (inherits(target, "mesh3d")) {
     mesh <- do.call(
       as_babylon_mesh,
-      c(list(x = x, color = color, alpha = alpha, specularity = specularity), list(...))
+      c(list(x = target, color = color, alpha = alpha, specularity = specularity), list(...))
     )
-    return(plot3d.babylon_mesh(mesh, add = add, axes = axes, nticks = nticks))
+    return(append_scene_objects(list(mesh), add = add, axes = axes, nticks = nticks, base = base))
   }
 
-  if (inherits(x, "babylon_mesh")) {
+  if (inherits(target, "babylon_mesh")) {
     args <- c(list(...), list(color = color, alpha = alpha, specularity = specularity))
     args <- args[!vapply(args, is.null, logical(1))]
-    return(do.call(plot3d.babylon_mesh, c(list(x = x, add = add, axes = axes, nticks = nticks), args)))
+    target <- do.call(modify_babylon_mesh, c(list(x = target, args = args)))
+    return(append_scene_objects(list(target), add = add, axes = axes, nticks = nticks, base = base))
   }
 
-  if (is.list(x) && identical(x$type, "mesh3d")) {
-    mesh <- normalize_scene_object(x)
-    return(plot3d.babylon_mesh(mesh, add = add, axes = axes, nticks = nticks, color = color, alpha = alpha, specularity = specularity, ...))
+  if (is.list(target) && identical(target$type, "mesh3d")) {
+    mesh <- normalize_scene_object(target)
+    mesh <- modify_babylon_mesh(
+      mesh,
+      c(
+        list(...),
+        list(color = color, alpha = alpha, specularity = specularity)
+      )
+    )
+    return(append_scene_objects(list(mesh), add = add, axes = axes, nticks = nticks, base = base))
   }
 
-  stop("`shade3d()` currently supports `mesh3d` and `babylon_mesh` objects.", call. = FALSE)
+  stop(
+    "`shade3d()` currently supports `mesh3d` and `babylon_mesh` objects, or a Babylonian htmlwidget / `babylon_scene` followed by one of those mesh types.",
+    call. = FALSE
+  )
 }
 
 #' Render a 3D mesh as a wireframe
@@ -543,7 +601,10 @@ shade3d <- function(
 #' This mirrors the feel of `rgl::wire3d()`/`wireframe`-style plotting by
 #' rendering mesh edges using Babylon's wireframe material mode.
 #'
-#' @param x A `mesh3d`, `babylon_mesh`, or compatible Babylonian mesh object.
+#' @param x A `mesh3d`, `babylon_mesh`, compatible Babylonian mesh object, or a
+#'   Babylonian htmlwidget / `babylon_scene` when using `wireframe3d()` in a pipe.
+#' @param mesh Optional mesh to add when `x` is an existing Babylonian
+#'   htmlwidget or `babylon_scene`, for example `plot3d(base) |> wireframe3d(mesh)`.
 #' @param color Optional wireframe color.
 #' @param alpha Optional wireframe opacity.
 #' @param specularity Optional surface specularity.
@@ -557,6 +618,7 @@ shade3d <- function(
 #' @export
 wireframe3d <- function(
   x,
+  mesh = NULL,
   color = NULL,
   alpha = NULL,
   specularity = "black",
@@ -565,24 +627,52 @@ wireframe3d <- function(
   nticks = 5,
   ...
 ) {
-  if (inherits(x, "mesh3d")) {
+  base <- NULL
+  target <- x
+
+  if (is_scene_container(x)) {
+    if (is.null(mesh)) {
+      stop("When `x` is a Babylonian htmlwidget or `babylon_scene`, supply the mesh to add via `mesh`.", call. = FALSE)
+    }
+    base <- x
+    target <- mesh
+  }
+
+  if (inherits(target, "mesh3d")) {
     mesh <- do.call(
       as_babylon_mesh,
-      c(list(x = x, color = color, alpha = alpha, specularity = specularity), list(...))
+      c(list(x = target, color = color, alpha = alpha, specularity = specularity), list(...))
     )
-    return(plot3d.babylon_mesh(mesh, add = add, axes = axes, nticks = nticks, wireframe = TRUE))
+    return(append_scene_objects(
+      list(modify_babylon_mesh(mesh, list(wireframe = TRUE))),
+      add = add,
+      axes = axes,
+      nticks = nticks,
+      base = base
+    ))
   }
 
-  if (inherits(x, "babylon_mesh")) {
+  if (inherits(target, "babylon_mesh")) {
     args <- c(list(...), list(color = color, alpha = alpha, specularity = specularity, wireframe = TRUE))
     args <- args[!vapply(args, is.null, logical(1))]
-    return(do.call(plot3d.babylon_mesh, c(list(x = x, add = add, axes = axes, nticks = nticks), args)))
+    target <- do.call(modify_babylon_mesh, c(list(x = target, args = args)))
+    return(append_scene_objects(list(target), add = add, axes = axes, nticks = nticks, base = base))
   }
 
-  if (is.list(x) && identical(x$type, "mesh3d")) {
-    mesh <- normalize_scene_object(x)
-    return(plot3d.babylon_mesh(mesh, add = add, axes = axes, nticks = nticks, color = color, alpha = alpha, specularity = specularity, wireframe = TRUE, ...))
+  if (is.list(target) && identical(target$type, "mesh3d")) {
+    mesh <- normalize_scene_object(target)
+    mesh <- modify_babylon_mesh(
+      mesh,
+      c(
+        list(...),
+        list(color = color, alpha = alpha, specularity = specularity, wireframe = TRUE)
+      )
+    )
+    return(append_scene_objects(list(mesh), add = add, axes = axes, nticks = nticks, base = base))
   }
 
-  stop("`wireframe3d()` currently supports `mesh3d` and `babylon_mesh` objects.", call. = FALSE)
+  stop(
+    "`wireframe3d()` currently supports `mesh3d` and `babylon_mesh` objects, or a Babylonian htmlwidget / `babylon_scene` followed by one of those mesh types.",
+    call. = FALSE
+  )
 }

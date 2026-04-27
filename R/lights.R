@@ -43,6 +43,8 @@ as_babylon_light <- function(
 #' `type` to choose the underlying Babylon light model, or call the dedicated
 #' wrappers such as [light3d_point()] and [light3d_hemispheric()].
 #'
+#' @param x Optional Babylonian htmlwidget / `babylon_scene` when using
+#'   `light3d()` in a pipe, or an unnamed alias for `type` in non-piped calls.
 #' @param type Babylon light type. Supported values are `"point"`,
 #'   `"directional"`, `"spot"`, and `"hemispheric"`.
 #' @param position Optional light position for point, spot, and directional
@@ -67,6 +69,7 @@ as_babylon_light <- function(
 #'
 #' @export
 light3d <- function(
+  x = NULL,
   type = c("hemispheric", "point", "directional", "spot"),
   position = NULL,
   direction = NULL,
@@ -84,6 +87,11 @@ light3d <- function(
   nticks = 5,
   ...
 ) {
+  base <- resolve_scene_base(x)
+  if (is.null(base) && !is.null(x)) {
+    type <- x
+  }
+
   light <- create_babylon_light(
     type = type,
     position = position,
@@ -99,7 +107,7 @@ light3d <- function(
     enabled = enabled
   )
 
-  append_current_scene(light, add = add, axes = axes, nticks = nticks)
+  append_scene_objects(list(light), add = add, axes = axes, nticks = nticks, base = base)
 }
 
 #' Create a BabylonJS point light
@@ -252,6 +260,9 @@ light3d_hemispheric <- function(
 #' Presets mirror the scene editor options and are positioned relative to a
 #' target mesh when supplied.
 #'
+#' @param scene Optional Babylonian htmlwidget / `babylon_scene` when using
+#'   `lighting_preset3d()` in a pipe, or an unnamed alias for `preset` in
+#'   non-piped calls.
 #' @param preset Lighting preset name. Supported values are `"three_point"`,
 #'   `"rembrandt"`, `"butterfly"`, and `"split"`.
 #' @param x Optional `mesh3d` or `babylon_mesh` used to estimate scene center
@@ -268,6 +279,7 @@ light3d_hemispheric <- function(
 #'
 #' @export
 lighting_preset3d <- function(
+  scene = NULL,
   preset = c("three_point", "rembrandt", "butterfly", "split"),
   x = NULL,
   center = NULL,
@@ -276,6 +288,11 @@ lighting_preset3d <- function(
   axes = TRUE,
   nticks = 5
 ) {
+  base <- resolve_scene_base(scene)
+  if (is.null(base) && !is.null(scene)) {
+    preset <- scene
+  }
+
   preset <- match.arg(preset)
   placement <- resolve_lighting_preset_placement(x = x, center = center, radius = radius)
   lights <- lighting_preset_definitions(
@@ -284,7 +301,7 @@ lighting_preset3d <- function(
     radius = placement$radius
   )
 
-  append_scene_objects(lights, add = add, axes = axes, nticks = nticks)
+  append_scene_objects(lights, add = add, axes = axes, nticks = nticks, base = base)
 }
 
 create_babylon_light <- function(

@@ -7,6 +7,9 @@ from html import escape
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 import uuid
 from typing import Any, Iterable, Optional, Sequence
 
@@ -39,6 +42,10 @@ _BABYLON_LOADERS_JS: str = (_LIB_DIR / "babylonjs.loaders.min.js").read_text(enc
 # UMD wrappers in both libraries fall through to `e.BABYLON = t()` (e = self =
 # window) — no CDN required and no RequireJS interference.
 _WIDGET_JS: str = (Path(__file__).with_name("widget.js")).read_text(encoding="utf-8")
+# The R HTMLWidgets babylon.js widget source — widget.js evals this via an
+# HTMLWidgets shim to provide the full rendering engine (editor, gizmos, etc.).
+_BABYLON_WIDGET_JS: str = (_LIB_DIR / "babylon_widget.js").read_text(encoding="utf-8")
+_SNAPSHOT_CAPTURE_JS = _LIB_DIR / "snapshot_capture.js"
 
 
 def _in_ipython_kernel() -> bool:
@@ -994,13 +1001,22 @@ if anywidget is not None and traitlets is not None:  # pragma: no branch
         width = traitlets.Int(900).tag(sync=True)
         height = traitlets.Int(700).tag(sync=True)
         element_id = traitlets.Unicode().tag(sync=True)
-        # Receives scene_state / par3d events emitted by the JS side.
-        # Format: {"event": "scene_state" | "par3d", "value": {...}, "ts": <int>}
+        # Receives full editor diffs emitted by the JS side.
+        # Format: {"event": "scene_state", "value": {...}, "ts": <int>}
         scene_state = traitlets.Dict({}).tag(sync=True)
+        # Receives camera-only pose updates emitted by the JS side.
+        # Format: {"event": "par3d", "value": {...}, "ts": <int>}
+        par3d_state = traitlets.Dict({}).tag(sync=True)
+        # Receives editor-side snapshot requests emitted by the scene editor UI.
+        # Format: {"event": "snapshot_request", "value": {...}, "ts": <int>}
+        snapshot_request = traitlets.Dict({}).tag(sync=True)
         # Local BabylonJS source code, passed to the browser once via traitlets.
         # widget.js evaluates them with new Function() to shadow RequireJS define.
         _babylon_js = traitlets.Unicode(_BABYLON_JS).tag(sync=True)
         _babylon_loaders_js = traitlets.Unicode(_BABYLON_LOADERS_JS).tag(sync=True)
+        # Full source of inst/htmlwidgets/babylon.js — the R widget with editor,
+        # gizmos, etc.  widget.js evals this via an HTMLWidgets shim.
+        _babylon_widget_js = traitlets.Unicode(_BABYLON_WIDGET_JS).tag(sync=True)
         # Screenshot round-trip: bump _snapshot_request to trigger JS capture;
         # JS writes the data:image/png;base64,... result to _snapshot_data.
         _snapshot_request = traitlets.Int(0).tag(sync=True)
@@ -1010,24 +1026,49 @@ if anywidget is not None and traitlets is not None:  # pragma: no branch
             super().__init__()
             self.scene_payload = scene.to_payload()
             self.scene_state = {}
+            self.par3d_state = {}
+            self.snapshot_request = {}
             self.width = int(width)
             self.height = int(height)
             self.element_id = f"babylonian-py-{uuid.uuid4().hex}"
 
         def get_scene(self) -> "Scene":
             """Return a Scene reflecting the current live state of the widget."""
-            state = self.scene_state
-            if not state:
-                return Scene(
-                    objects=deepcopy(self.scene_payload.get("objects", [])),
-                    scene=deepcopy(self.scene_payload.get("scene", {})),
-                    interaction=deepcopy(self.scene_payload.get("interaction")),
-                )
-            return Scene(
-                objects=deepcopy(state.get("objects", [])),
-                scene=deepcopy(state.get("scene", {})),
-                interaction=deepcopy(state.get("interaction")),
+            result = Scene(
+                objects=deepcopy(self.scene_payload.get("objects", [])),
+                scene=deepcopy(self.scene_payload.get("scene", {})),
+                interaction=deepcopy(self.scene_payload.get("interaction")),
             )
+
+            state = self.scene_state or {}
+            event_name = state.get("event")
+            value = state.get("value", {})
+
+            if event_name == "scene_state" and isinstance(value, dict):
+                if "objects" in value or "scene" in value:
+                    result = Scene(
+                        objects=deepcopy(value.get("objects", self.scene_payload.get("objects", []))),
+                        scene=deepcopy(value.get("scene", self.scene_payload.get("scene", {}))),
+                        interaction=deepcopy(value.get("interaction", self.scene_payload.get("interaction"))),
+                    )
+                elif value.get("view"):
+                    result.scene.setdefault("view", {})
+                    result.scene["view"].update(deepcopy(value["view"]))
+
+            elif isinstance(value, dict) and ("objects" in value or "scene" in value):
+                result = Scene(
+                    objects=deepcopy(value.get("objects", [])),
+                    scene=deepcopy(value.get("scene", {})),
+                    interaction=deepcopy(value.get("interaction")),
+                )
+
+            par3d = self.par3d_state or {}
+            par3d_value = par3d.get("value")
+            if par3d.get("event") == "par3d" and isinstance(par3d_value, dict):
+                result.scene.setdefault("view", {})
+                result.scene["view"].update(deepcopy(par3d_value))
+
+            return result
 
         def save_html(self, path: str | Path) -> Path:
             scene = self.get_scene()
@@ -1195,12 +1236,17 @@ def snapshot3d(
     *,
     widget: Optional[Any] = None,
     timeout: float = 10.0,
+    vwidth: Optional[int] = None,
+    vheight: Optional[int] = None,
+    delay: float = 0.5,
 ) -> Path:
     """Capture a screenshot of a rendered scene and save to a file.
 
-    This works with the anywidget renderer.  The JS side renders one frame,
-    calls ``canvas.toDataURL("image/png")``, and sends the data back through
-    the ``_snapshot_data`` traitlet.
+    When a live anywidget is available, the JS side renders one frame, calls
+    ``canvas.toDataURL("image/png")``, and sends the data back through the
+    ``_snapshot_data`` traitlet.  If no live widget response arrives, Babylonian
+    falls back to an offline capture path: it saves a standalone HTML scene and
+    screenshots its ``<canvas>`` with headless Playwright.
 
     Parameters
     ----------
@@ -1208,23 +1254,55 @@ def snapshot3d(
         Output path (default ``"snapshot3d.png"``).
     widget:
         A :class:`BabylonWidget` instance.  Defaults to the last widget
-        created by :func:`render_scene3d` with ``renderer="anywidget"``.
+        created by :func:`render_scene3d` with ``renderer="anywidget"``.  If a
+        :class:`Scene` or :class:`BabylonHTMLWidget` is supplied, Babylonian uses
+        the offline capture path directly.
     timeout:
-        Maximum seconds to wait for the screenshot data (default 10).
+        Maximum seconds to wait for either the live widget response or the
+        offline browser capture (default 10).
+    vwidth, vheight:
+        Optional viewport width and height for offline capture.  Defaults to
+        the widget's dimensions when available.
+    delay:
+        Extra seconds to wait before capturing an offline screenshot.  This
+        mirrors R's `snapshot3d()` delay behavior and helps stabilize dynamic
+        scenes after initial render.
 
     Returns
     -------
     The resolved output :class:`~pathlib.Path`.
     """
-    if widget is None:
-        widget = _LAST_ANYWIDGET
-    if widget is None or not hasattr(widget, "_snapshot_request"):
+    target = widget if widget is not None else (_LAST_ANYWIDGET if _LAST_ANYWIDGET is not None else _CURRENT_SCENE)
+    if target is None:
         raise RuntimeError(
-            "No anywidget is available.  Render a scene with renderer='anywidget' first."
+            "No Babylonian scene is available. Render a scene first or pass `widget=`."
         )
 
     out = Path(filename)
+    out.parent.mkdir(parents=True, exist_ok=True)
 
+    if hasattr(target, "_snapshot_request"):
+        try:
+            return _snapshot_from_live_anywidget(target, out, timeout=timeout)
+        except TimeoutError:
+            pass
+
+    scene, width, height = _snapshot_scene_and_dimensions(
+        target,
+        vwidth=vwidth,
+        vheight=vheight,
+    )
+    return _snapshot_from_offline_html(
+        scene,
+        out,
+        width=width,
+        height=height,
+        timeout=timeout,
+        delay=delay,
+    )
+
+
+def _snapshot_from_live_anywidget(widget: Any, out: Path, *, timeout: float) -> Path:
     # Record current value so we can detect when JS sends a new one.
     old_data = widget._snapshot_data
     widget._snapshot_request = widget._snapshot_request + 1
@@ -1244,9 +1322,106 @@ def snapshot3d(
         )
 
     data_url = widget._snapshot_data
-    # Strip the data:image/png;base64, prefix.
     _, _, b64 = data_url.partition(",")
     out.write_bytes(base64.b64decode(b64))
+    return out.resolve()
+
+
+def _snapshot_scene_and_dimensions(
+    target: Any,
+    *,
+    vwidth: Optional[int],
+    vheight: Optional[int],
+) -> tuple[Scene, int, int]:
+    scene: Optional[Scene] = None
+
+    if isinstance(target, Scene):
+        scene = target.clone()
+    elif hasattr(target, "get_scene"):
+        scene = target.get_scene()
+    elif hasattr(target, "scene") and isinstance(target.scene, Scene):
+        scene = target.scene.clone()
+
+    if scene is None:
+        raise RuntimeError(
+            "Could not derive a Babylonian scene from `widget=` for offline snapshot capture."
+        )
+
+    width = _normalize_snapshot_dimension(
+        vwidth if vwidth is not None else getattr(target, "width", None),
+        default=900,
+    )
+    height = _normalize_snapshot_dimension(
+        vheight if vheight is not None else getattr(target, "height", None),
+        default=700,
+    )
+    return scene, width, height
+
+
+def _normalize_snapshot_dimension(value: Any, *, default: int) -> int:
+    try:
+        dim = int(value)
+    except (TypeError, ValueError):
+        dim = default
+    return dim if dim > 0 else default
+
+
+def _snapshot_from_offline_html(
+    scene: Scene,
+    out: Path,
+    *,
+    width: int,
+    height: int,
+    timeout: float,
+    delay: float,
+) -> Path:
+    node = shutil.which("node")
+    if node is None:
+        raise RuntimeError(
+            "Node.js is required for offline `snapshot3d()` capture but was not found on PATH."
+        )
+    if not _SNAPSHOT_CAPTURE_JS.exists():
+        raise RuntimeError(f"Snapshot helper script not found: {_SNAPSHOT_CAPTURE_JS}")
+
+    delay_ms = max(int(delay * 1000), 0)
+    timeout_ms = max(int(timeout * 1000), 1000)
+
+    with tempfile.TemporaryDirectory(prefix="babylonian-snapshot-") as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        html_path = tmpdir_path / "snapshot_scene.html"
+        BabylonHTMLWidget(
+            scene=scene,
+            width=width,
+            height=height,
+        ).save_html(html_path)
+
+        result = subprocess.run(
+            [
+                node,
+                str(_SNAPSHOT_CAPTURE_JS),
+                str(html_path),
+                str(out),
+                str(width),
+                str(height),
+                str(delay_ms),
+                str(timeout_ms),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=max(timeout + delay + 10, 15),
+        )
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(
+            "Offline `snapshot3d()` capture failed. "
+            "Make sure Playwright is installed in this checkout (`npm install`)."
+            + (f"\n{detail}" if detail else "")
+        )
+
+    if not out.exists() or out.stat().st_size == 0:
+        raise RuntimeError("Offline `snapshot3d()` capture did not produce an image file.")
+
     return out.resolve()
 
 def shade3d(

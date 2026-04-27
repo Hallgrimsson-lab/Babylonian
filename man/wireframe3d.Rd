@@ -4,6 +4,7 @@
 \usage{
 wireframe3d(
   x,
+  mesh = NULL,
   color = NULL,
   alpha = NULL,
   specularity = "black",
@@ -14,7 +15,11 @@ wireframe3d(
 )
 }
 \arguments{
-\item{x}{A \code{mesh3d}, \code{babylon_mesh}, or compatible Babylonian mesh object.}
+\item{x}{A \code{mesh3d}, \code{babylon_mesh}, compatible Babylonian mesh object, or a
+Babylonian htmlwidget / \code{babylon_scene} when using \code{wireframe3d()} in a pipe.}
+
+\item{mesh}{Optional mesh to add when \code{x} is an existing Babylonian
+htmlwidget or \code{babylon_scene}, for example \code{plot3d(base) |> wireframe3d(mesh)}.}
 
 \item{color}{Optional wireframe color.}
 

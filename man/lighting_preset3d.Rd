@@ -5,6 +5,7 @@
 \title{Add a named lighting preset}
 \usage{
 lighting_preset3d(
+  scene = NULL,
   preset = c("three_point", "rembrandt", "butterfly", "split"),
   x = NULL,
   center = NULL,
@@ -15,6 +16,10 @@ lighting_preset3d(
 )
 }
 \arguments{
+\item{scene}{Optional Babylonian htmlwidget / `babylon_scene` when using
+`lighting_preset3d()` in a pipe, or an unnamed alias for `preset` in
+non-piped calls.}
+
 \item{preset}{Lighting preset name. Supported values are `"three_point"`,
 `"rembrandt"`, `"butterfly"`, and `"split"`.}
 

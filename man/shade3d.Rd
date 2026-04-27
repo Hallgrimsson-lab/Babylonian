@@ -6,6 +6,7 @@
 \usage{
 shade3d(
   x,
+  mesh = NULL,
   color = NULL,
   alpha = NULL,
   specularity = "black",
@@ -16,7 +17,11 @@ shade3d(
 )
 }
 \arguments{
-\item{x}{A `mesh3d`, `babylon_mesh`, or compatible Babylonian mesh object.}
+\item{x}{A `mesh3d`, `babylon_mesh`, compatible Babylonian mesh object, or a
+Babylonian htmlwidget / `babylon_scene` when using `shade3d()` in a pipe.}
+
+\item{mesh}{Optional mesh to add when `x` is an existing Babylonian
+htmlwidget or `babylon_scene`, for example `plot3d(base) |> shade3d(mesh)`.}
 
 \item{color}{Optional surface color.}
 

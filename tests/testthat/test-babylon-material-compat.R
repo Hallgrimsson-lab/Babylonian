@@ -79,6 +79,91 @@ testthat::test_that("current_scene3d returns the accumulated additive scene", {
   testthat::expect_true(is.null(last_scene_state()))
 })
 
+testthat::test_that("shade3d accepts a piped Babylonian widget as the base scene", {
+  clear_scene3d()
+
+  base_mesh <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0),
+      c(0, 1, 0)
+    )
+  )
+  overlay_mesh <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 1),
+      c(1, 0, 1),
+      c(0, 1, 1)
+    )
+  )
+
+  widget <- plot3d(base_mesh) |>
+    shade3d(overlay_mesh, color = "red", alpha = 0.5)
+
+  scene <- current_scene3d()
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_length(widget$x$objects, 2L)
+  testthat::expect_identical(widget$x$objects[[2]]$color, "#FF0000")
+  testthat::expect_equal(widget$x$objects[[2]]$alpha, 0.5)
+  testthat::expect_s3_class(scene, "babylon_scene")
+  testthat::expect_length(scene$objects, 2L)
+})
+
+testthat::test_that("scene accumulator helpers accept a piped Babylonian widget", {
+  clear_scene3d()
+
+  base_mesh <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 0),
+      c(1, 0, 0),
+      c(0, 1, 0)
+    )
+  )
+  overlay_mesh <- make_test_mesh3d(
+    rbind(
+      c(0, 0, 1),
+      c(1, 0, 1),
+      c(0, 1, 1)
+    )
+  )
+  point_mat <- rbind(c(0.1, 0.1, 0.1), c(0.3, 0.3, 0.3))
+  sphere_mat <- rbind(c(0.2, 0.2, 0.2))
+  segment_mat <- rbind(c(0, 0, 0), c(0, 0, 1))
+  line_mat <- rbind(c(0, 0, 0), c(1, 1, 1), c(1, 0, 1))
+  text_mat <- rbind(c(0.5, 0.5, 0.5))
+
+  widget <- plot3d(base_mesh) |>
+    points3d(point_mat, color = "red") |>
+    spheres3d(sphere_mat, color = "blue") |>
+    segments3d(segment_mat, color = "green") |>
+    lines3d(line_mat, color = "black") |>
+    text3d(text_mat, texts = "label", color = "orange") |>
+    planes3d(c(0, 0, 1, -0.25), color = "gray70") |>
+    shade3d(overlay_mesh, color = "pink", alpha = 0.4) |>
+    wireframe3d(overlay_mesh, color = "purple") |>
+    light3d(type = "point", position = c(1, 1, 1), name = "key") |>
+    lighting_preset3d("split") |>
+    title3d(main = "Pipe Scene") |>
+    scaleBar3d(length = 5, units = "mm")
+
+  scene <- current_scene3d()
+
+  testthat::expect_s3_class(widget, "htmlwidget")
+  testthat::expect_s3_class(scene, "babylon_scene")
+  testthat::expect_identical(widget$x$scene$title$main, "Pipe Scene")
+  testthat::expect_equal(widget$x$scene$scale_bar$length, 5)
+  testthat::expect_identical(widget$x$scene$scale_bar$units, "mm")
+  testthat::expect_true(any(vapply(widget$x$objects, function(obj) identical(obj$type, "points3d"), logical(1))))
+  testthat::expect_true(any(vapply(widget$x$objects, function(obj) identical(obj$type, "spheres3d"), logical(1))))
+  testthat::expect_true(any(vapply(widget$x$objects, function(obj) identical(obj$type, "segments3d"), logical(1))))
+  testthat::expect_true(any(vapply(widget$x$objects, function(obj) identical(obj$type, "lines3d"), logical(1))))
+  testthat::expect_true(any(vapply(widget$x$objects, function(obj) identical(obj$type, "text3d"), logical(1))))
+  testthat::expect_true(any(vapply(widget$x$objects, function(obj) identical(obj$type, "planes3d"), logical(1))))
+  testthat::expect_true(any(vapply(widget$x$objects, function(obj) identical(obj$type, "light3d"), logical(1))))
+  testthat::expect_true(any(vapply(widget$x$objects, function(obj) isTRUE(obj$wireframe), logical(1))))
+})
+
 testthat::test_that("par3d windowRect sets default widget sizing", {
   previous_par3d <- .babylon_state$par3d
   previous_last_scene <- .babylon_state$last_scene_par3d
@@ -1047,6 +1132,15 @@ testthat::test_that("scaleBar3d stores scale bar scene metadata", {
   testthat::expect_equal(widget$x$scene$scale_bar$length, 10)
   testthat::expect_identical(widget$x$scene$scale_bar$units, "mm")
   testthat::expect_identical(widget$x$scene$scale_bar$position, "bottomleft")
+})
+
+testthat::test_that("planes3d keeps a single coefficient vector as one plane", {
+  coeffs <- plane_coefficients(c(0, 0, 1, 0))
+  widget <- planes3d(c(0, 0, 1, 0), add = FALSE, axes = FALSE)
+
+  testthat::expect_equal(dim(coeffs), c(1L, 4L))
+  testthat::expect_equal(as.numeric(coeffs[1, ]), c(0, 0, 1, 0))
+  testthat::expect_equal(dim(widget$x$objects[[1]]$coefficients), c(1L, 4L))
 })
 
 testthat::test_that("scale bar custom units may be temporarily blank in editor state", {

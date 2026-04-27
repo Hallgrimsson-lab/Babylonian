@@ -10,3 +10,6 @@ clear_scene3d()
 This clears the in-memory scene state used by `plot3d(..., add = TRUE)` and
 helper wrappers such as [points3d()] and [spheres3d()].
 }
+\seealso{
+[current_scene3d()]
+}

@@ -363,12 +363,52 @@ current_scene_spec <- function() {
   .babylon_state$current_scene
 }
 
-append_current_scene <- function(object, add = TRUE, axes = TRUE, nticks = 5) {
-  append_scene_objects(list(object), add = add, axes = axes, nticks = nticks)
+scene_input_spec <- function(x) {
+  if (inherits(x, "htmlwidget")) {
+    spec <- scene3d(
+      objects = x$x$objects %||% list(),
+      scene = x$x$scene %||% NULL,
+      interaction = x$x$interaction %||% NULL
+    )
+    return(list(
+      scene = spec,
+      interaction = x$x$interaction %||% NULL,
+      width = x$width %||% NULL,
+      height = x$height %||% NULL
+    ))
+  }
+
+  if (inherits(x, "babylon_scene")) {
+    return(list(
+      scene = x,
+      interaction = x$interaction %||% NULL,
+      width = NULL,
+      height = NULL
+    ))
+  }
+
+  stop("Expected a Babylonian htmlwidget or `babylon_scene`.", call. = FALSE)
 }
 
-append_scene_objects <- function(objects, add = TRUE, axes = TRUE, nticks = 5) {
-  scene_spec <- current_scene_spec()
+is_scene_container <- function(x) {
+  inherits(x, "htmlwidget") || inherits(x, "babylon_scene")
+}
+
+resolve_scene_base <- function(x) {
+  if (is_scene_container(x)) {
+    return(x)
+  }
+  NULL
+}
+
+resolve_scene_spec <- function(add = TRUE, axes = TRUE, nticks = 5, base = NULL) {
+  base_scene <- NULL
+
+  if (!is.null(base)) {
+    base_scene <- scene_input_spec(base)$scene
+  }
+
+  scene_spec <- base_scene %||% current_scene_spec()
 
   if (!isTRUE(add) || is.null(scene_spec)) {
     scene_spec <- scene3d(
@@ -390,12 +430,43 @@ append_scene_objects <- function(objects, add = TRUE, axes = TRUE, nticks = 5) {
     }
   }
 
+  scene_spec
+}
+
+render_scene_spec <- function(scene_spec, base = NULL) {
+  base_interaction <- NULL
+  base_width <- NULL
+  base_height <- NULL
+
+  if (!is.null(base)) {
+    base_input <- scene_input_spec(base)
+    base_interaction <- base_input$interaction
+    base_width <- base_input$width
+    base_height <- base_input$height
+  }
+
+  .babylon_state$current_scene <- scene_spec
+
+  babylon(
+    data = scene_spec$objects,
+    interaction = base_interaction %||% scene_spec$interaction %||% NULL,
+    scene = scene_spec$scene,
+    width = base_width,
+    height = base_height
+  )
+}
+
+append_current_scene <- function(object, add = TRUE, axes = TRUE, nticks = 5) {
+  append_scene_objects(list(object), add = add, axes = axes, nticks = nticks)
+}
+
+append_scene_objects <- function(objects, add = TRUE, axes = TRUE, nticks = 5, base = NULL) {
+  scene_spec <- resolve_scene_spec(add = add, axes = axes, nticks = nticks, base = base)
+
   for (object in objects) {
     scene_spec$objects[[length(scene_spec$objects) + 1L]] <- object
   }
-  .babylon_state$current_scene <- scene_spec
-
-  babylon(scene_spec)
+  render_scene_spec(scene_spec, base = base)
 }
 
 #' Get or set Babylonian view parameters

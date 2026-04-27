@@ -5,6 +5,7 @@
 \title{Add rgl-style scene titles and axis labels}
 \usage{
 title3d(
+  x = NULL,
   main = NULL,
   sub = NULL,
   xlab = NULL,

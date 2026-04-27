@@ -966,6 +966,14 @@ plane_coefficients <- function(a, b = NULL, c = NULL, d = 0) {
     }
   }
 
+  if (is.null(b) && is.null(c) && is.atomic(a) && length(a) == 4L) {
+    coeffs <- matrix(as.numeric(a), nrow = 1L)
+    if (!all(is.finite(coeffs))) {
+      stop("Plane coefficients must be finite numeric values.", call. = FALSE)
+    }
+    return(coeffs)
+  }
+
   coords <- grDevices::xyz.coords(a, y = b, z = c, recycle = TRUE, setLab = FALSE)
   normals <- cbind(
     as.numeric(coords$x),

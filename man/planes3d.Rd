@@ -5,6 +5,10 @@
 \title{Render one or more clipping-style planes}
 \usage{
 planes3d(
+  a,
+  b = NULL,
+  c = NULL,
+  d = 0,
   ...,
   color = "gray70",
   alpha = 0.4,
@@ -15,9 +19,13 @@ planes3d(
 )
 }
 \arguments{
-\item{...}{Plane coefficients. Supply either four numeric vectors
-`a, b, c, d` of equal length, a matrix/data frame with four columns, or a
-`3 x 3` matrix of points used to fit a single plane.}
+\item{a, b, c, d}{Plane coefficients for equations of the form
+`a*x + b*y + c*z + d = 0`. Coefficients are parsed using
+[graphics::xyz.coords()] semantics and recycled as needed, which matches
+`rgl::planes3d()`. Babylonian also accepts a `3 x 3` point matrix in `a`
+to fit a single plane.}
+
+\item{...}{Reserved for future material-style arguments.}
 
 \item{color}{Plane color.}
 

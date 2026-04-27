@@ -3,3 +3,10 @@
 .RData
 .Ruserdata
 Babylonian.Rproj
+
+# Playwright
+node_modules/
+playwright-report/
+test-results/
+# Generated HTML fixtures (re-created by generate_fixtures.py)
+python/tests/playwright/fixtures/

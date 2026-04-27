@@ -7,6 +7,7 @@
 \title{Create BabylonJS scene lights}
 \usage{
 light3d(
+  x = NULL,
   type = c("hemispheric", "point", "directional", "spot"),
   position = NULL,
   direction = NULL,
@@ -86,6 +87,9 @@ light3d_hemispheric(
 )
 }
 \arguments{
+\item{x}{Optional Babylonian htmlwidget / \code{babylon_scene} when using
+\code{light3d()} in a pipe, or an unnamed alias for \code{type} in non-piped calls.}
+
 \item{type}{Babylon light type. Supported values are \code{"point"},
 \code{"directional"}, \code{"spot"}, and \code{"hemispheric"}.}
 
