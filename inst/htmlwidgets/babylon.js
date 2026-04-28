@@ -1523,10 +1523,11 @@ HTMLWidgets.widget({
 
       var matrix = new BABYLON.Matrix();
       BABYLON.Matrix.FromQuaternionToRef(quaternion, matrix);
+      // BABYLON.Matrix.m is column-major; read rows by striding columns.
       return [
-        [matrix.m[0], matrix.m[1], matrix.m[2]],
-        [matrix.m[4], matrix.m[5], matrix.m[6]],
-        [matrix.m[8], matrix.m[9], matrix.m[10]]
+        [matrix.m[0], matrix.m[4], matrix.m[8]],
+        [matrix.m[1], matrix.m[5], matrix.m[9]],
+        [matrix.m[2], matrix.m[6], matrix.m[10]]
       ];
     }
 
@@ -2848,6 +2849,7 @@ HTMLWidgets.widget({
         target.helper.isPickable = true;
         state.helpers.push(target.helper);
       }
+      bindEditorTargetTransformObserver(state, target);
       updateLightHelpers(state);
       selectEditorTarget(state, target.id);
       publishSceneEditorState(state);
@@ -4120,7 +4122,8 @@ HTMLWidgets.widget({
     }
 
     function schedulePoseStatePublish() {
-      if ((!activeInteractionState || activeInteractionState.mode !== "pose_3d") && !currentSyncConfig) {
+      var mode = activeInteractionState ? activeInteractionState.mode : null;
+      if (mode !== "pose_3d" && mode !== "edit_scene3d" && !currentSyncConfig) {
         return;
       }
 
@@ -4132,6 +4135,8 @@ HTMLWidgets.widget({
         publishViewStateHandle = null;
         if (activeInteractionState && activeInteractionState.mode === "pose_3d") {
           publishPoseState(activeInteractionState);
+        } else if (activeInteractionState && activeInteractionState.mode === "edit_scene3d") {
+          publishSceneEditorState(activeInteractionState);
         }
         publishSyncedViewState();
       });
@@ -4588,6 +4593,7 @@ HTMLWidgets.widget({
           }
         };
         activeInteractionState = editorState;
+        bindEditorGizmoPublishers(editorState);
 
         editorState.targets.forEach(function(target) {
           if (target.kind === "light") {
@@ -4599,6 +4605,7 @@ HTMLWidgets.widget({
             configureLightShadows(target);
           }
         });
+        bindEditorTargetTransformObservers(editorState);
         editorState.pointerObserver = scene.onPointerObservable.add(function(pointerInfo) {
           if (!pointerInfo || pointerInfo.type !== BABYLON.PointerEventTypes.POINTERPICK) {
             return;
@@ -4989,6 +4996,115 @@ HTMLWidgets.widget({
       applyBoundingBoxToEditorTarget(target);
     }
 
+    function editorTargetTransformSignature(target) {
+      if (!target || !target.node) {
+        return null;
+      }
+
+      return JSON.stringify({
+        position: vectorToArray(target.node.position || new BABYLON.Vector3(0, 0, 0)),
+        rotation: nodeRotationArray(target.node),
+        scaling: vectorToArray(target.node.scaling || new BABYLON.Vector3(1, 1, 1))
+      });
+    }
+
+    function bindEditorTargetTransformObserver(state, target) {
+      if (!state || !target || !target.node || target.kind !== "mesh" || target.transformObserverBound) {
+        return;
+      }
+
+      target.lastTransformSignature = editorTargetTransformSignature(target);
+
+      var callback = function() {
+        var nextSignature = editorTargetTransformSignature(target);
+        if (!nextSignature || nextSignature === target.lastTransformSignature) {
+          return;
+        }
+        target.lastTransformSignature = nextSignature;
+        updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+        publishSceneEditorState(state);
+      };
+
+      if (target.node.onAfterWorldMatrixUpdateObservable && typeof target.node.onAfterWorldMatrixUpdateObservable.add === "function") {
+        target.transformObserverType = "world";
+        target.transformObserver = target.node.onAfterWorldMatrixUpdateObservable.add(callback);
+      } else if (target.node.onAfterRenderObservable && typeof target.node.onAfterRenderObservable.add === "function") {
+        target.transformObserverType = "render";
+        target.transformObserver = target.node.onAfterRenderObservable.add(callback);
+      }
+
+      target.transformObserverBound = true;
+    }
+
+    function bindEditorTargetTransformObservers(state) {
+      if (!state || !state.targets) {
+        return;
+      }
+
+      state.targets.forEach(function(target) {
+        bindEditorTargetTransformObserver(state, target);
+      });
+    }
+
+    function publishEditorTransformChange(state) {
+      if (!state || state.mode !== "edit_scene3d") {
+        return;
+      }
+
+      updateLightHelpers(state);
+      updateSceneEditorPanel(state, buildSceneEditorPayload(state));
+      publishSceneEditorState(state);
+    }
+
+    function bindEditorGizmoAxisDrag(axisGizmo, state) {
+      if (!axisGizmo || !state) {
+        return;
+      }
+
+      if (axisGizmo.dragBehavior && axisGizmo.dragBehavior.onDragObservable && typeof axisGizmo.dragBehavior.onDragObservable.add === "function") {
+        axisGizmo.dragBehavior.onDragObservable.add(function() {
+          publishEditorTransformChange(state);
+        });
+      }
+
+      if (axisGizmo.dragBehavior && axisGizmo.dragBehavior.onDragEndObservable && typeof axisGizmo.dragBehavior.onDragEndObservable.add === "function") {
+        axisGizmo.dragBehavior.onDragEndObservable.add(function() {
+          publishEditorTransformChange(state);
+        });
+      }
+    }
+
+    function bindEditorGizmoPublishers(state) {
+      if (!state || !state.gizmoManager || state.gizmoPublishersBound) {
+        return;
+      }
+
+      var gizmos = state.gizmoManager.gizmos || {};
+
+      ["positionGizmo", "rotationGizmo", "scaleGizmo"].forEach(function(name) {
+        var gizmo = gizmos[name];
+        if (!gizmo) {
+          return;
+        }
+
+        bindEditorGizmoAxisDrag(gizmo.xGizmo, state);
+        bindEditorGizmoAxisDrag(gizmo.yGizmo, state);
+        bindEditorGizmoAxisDrag(gizmo.zGizmo, state);
+
+        if (gizmo.uniformScaleGizmo) {
+          bindEditorGizmoAxisDrag(gizmo.uniformScaleGizmo, state);
+        }
+
+        if (gizmo.onDragObservable && typeof gizmo.onDragObservable.add === "function") {
+          gizmo.onDragObservable.add(function() {
+            publishEditorTransformChange(state);
+          });
+        }
+      });
+
+      state.gizmoPublishersBound = true;
+    }
+
     function nextEditorTargetIndex(state) {
       if (!state || !state.targets || !state.targets.length) {
         return 0;
@@ -5233,6 +5349,14 @@ HTMLWidgets.widget({
     function disposeEditorTarget(target) {
       if (!target) {
         return;
+      }
+
+      if (target.transformObserver && target.node) {
+        if (target.transformObserverType === "world" && target.node.onAfterWorldMatrixUpdateObservable) {
+          target.node.onAfterWorldMatrixUpdateObservable.remove(target.transformObserver);
+        } else if (target.transformObserverType === "render" && target.node.onAfterRenderObservable) {
+          target.node.onAfterRenderObservable.remove(target.transformObserver);
+        }
       }
 
       if (target.helper && target.helper.dispose) {

@@ -640,7 +640,7 @@ resolve_widget_dimensions <- function(width = NULL, height = NULL) {
 }
 
 set_last_live_par3d <- function(x) {
-  .babylon_state$last_live_par3d <- deserialize_par3d(x)
+  .babylon_state$last_live_par3d <- deserialize_par3d(normalize_view(x))
   invisible(.babylon_state$last_live_par3d)
 }
 

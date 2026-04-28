@@ -212,13 +212,79 @@ testthat::test_that("apply_scene_state accepts create_pose_3d-style view payload
   pose <- list(
     zoom = 0.8,
     userMatrix = diag(4),
-    bg = "#ffffff"
+    bg = "#ffffff",
+    camera = list(alpha = 1.2, beta = 0.8, radius = 5, target = c(0, 0, 0))
   )
 
   updated <- apply_scene_state(widget, state = pose)
 
   testthat::expect_equal(updated$x$scene$view$zoom, 0.8)
   testthat::expect_identical(updated$x$scene$view$bg, "#FFFFFF")
+  testthat::expect_equal(updated$x$scene$view$camera$alpha, 1.2)
+})
+
+testthat::test_that("current_pose_input prefers the last live pose over fallback", {
+  previous_live <- .babylon_state$last_live_par3d
+  on.exit({
+    .babylon_state$last_live_par3d <- previous_live
+  }, add = TRUE)
+
+  set_last_live_par3d(list(
+    zoom = 0.8,
+    userMatrix = diag(4),
+    bg = "#ffffff",
+    camera = list(alpha = 1.2, beta = 0.8, radius = 5, target = c(0, 0, 0))
+  ))
+
+  pose <- current_pose_input(NULL, fallback = list(zoom = 0.05, userMatrix = diag(4)))
+
+  testthat::expect_equal(pose$zoom, 0.8)
+  testthat::expect_equal(pose$camera$alpha, 1.2)
+})
+
+testthat::test_that("current_scene_state_input prefers the last live scene state over fallback", {
+  previous_state <- .babylon_state$last_scene_state
+  on.exit({
+    .babylon_state$last_scene_state <- previous_state
+  }, add = TRUE)
+
+  live_state <- list(
+    view = list(zoom = 0.8, userMatrix = diag(4), bg = "#ffffff"),
+    objects = list(list(index = 1, primitive_type = "points3d"))
+  )
+  set_last_scene_state(live_state)
+
+  state <- current_scene_state_input(NULL, fallback = list(
+    view = list(zoom = 0.05, userMatrix = diag(4)),
+    objects = list()
+  ))
+
+  testthat::expect_equal(state$view$zoom, 0.8)
+  testthat::expect_length(state$objects, 1L)
+})
+
+testthat::test_that("pose and scene-state helpers accept babylon_scene objects", {
+  scene <- scene3d(
+    objects = list(as_babylon_points(matrix(c(0, 0, 0), ncol = 3))),
+    scene = list(axes = FALSE)
+  )
+  pose <- list(
+    zoom = 0.8,
+    userMatrix = diag(4),
+    bg = "#ffffff"
+  )
+
+  posed_widget <- create_pose_3d(scene)
+  edited_widget <- edit_scene3d(scene)
+  updated_widget <- apply_scene_state(scene, state = pose)
+
+  testthat::expect_s3_class(posed_widget, "htmlwidget")
+  testthat::expect_identical(posed_widget$x$interaction$mode, "pose_3d")
+  testthat::expect_s3_class(edited_widget, "htmlwidget")
+  testthat::expect_identical(edited_widget$x$interaction$mode, "edit_scene3d")
+  testthat::expect_s3_class(updated_widget, "htmlwidget")
+  testthat::expect_equal(updated_widget$x$scene$view$zoom, 0.8)
+  testthat::expect_identical(updated_widget$x$scene$view$bg, "#FFFFFF")
 })
 
 testthat::test_that("scene editor removals persist when scene state is reapplied", {

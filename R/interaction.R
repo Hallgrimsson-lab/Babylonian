@@ -200,13 +200,33 @@ paint_vertices3d <- function(
 #'
 #' @export
 create_pose_3d <- function(x, width = NULL, height = NULL, ...) {
-  widget <- do.call(
-    plot3d,
-    c(
-      list(x = x, add = FALSE),
-      list(...)
+  if (inherits(x, "htmlwidget")) {
+    widget <- babylon(
+      data = x$x$objects %||% list(),
+      interaction = x$x$interaction %||% NULL,
+      scene = x$x$scene %||% NULL,
+      width = width %||% x$width,
+      height = height %||% x$height,
+      elementId = NULL
     )
-  )
+  } else if (inherits(x, "babylon_scene")) {
+    widget <- babylon(
+      data = x$objects %||% list(),
+      interaction = x$interaction %||% NULL,
+      scene = x$scene %||% NULL,
+      width = width,
+      height = height,
+      elementId = NULL
+    )
+  } else {
+    widget <- do.call(
+      plot3d,
+      c(
+        list(x = x, add = FALSE),
+        list(...)
+      )
+    )
+  }
   widget$x$interaction <- list(mode = "pose_3d")
   widget$x$scene$view <- NULL
 
@@ -247,6 +267,15 @@ edit_scene3d <- function(x, width = NULL, height = NULL, ...) {
       scene = x$x$scene %||% NULL,
       width = width %||% x$width,
       height = height %||% x$height,
+      elementId = NULL
+    )
+  } else if (inherits(x, "babylon_scene")) {
+    widget <- babylon(
+      data = x$objects %||% list(),
+      interaction = x$interaction %||% NULL,
+      scene = x$scene %||% NULL,
+      width = width,
+      height = height,
       elementId = NULL
     )
   } else {
@@ -326,6 +355,13 @@ apply_scene_state <- function(x = NULL, state = last_scene_state(), ...) {
 
   if (inherits(x, "htmlwidget")) {
     widget <- x
+  } else if (inherits(x, "babylon_scene")) {
+    widget <- babylon(
+      data = x$objects %||% list(),
+      interaction = x$interaction %||% NULL,
+      scene = x$scene %||% NULL,
+      elementId = NULL
+    )
   } else {
     widget <- do.call(
       plot3d,
@@ -464,16 +500,16 @@ set_last_scene_state <- function(x) {
 
 current_pose_input <- function(x = NULL, fallback = NULL) {
   if (!is.null(x) && nzchar(x)) {
-    return(deserialize_par3d(jsonlite::fromJSON(x, simplifyVector = TRUE)))
-  }
-
-  if (!is.null(fallback)) {
-    return(fallback)
+    return(deserialize_par3d(normalize_view(jsonlite::fromJSON(x, simplifyVector = TRUE))))
   }
 
   live <- last_par3d(live = TRUE)
   if (!is.null(live)) {
     return(live)
+  }
+
+  if (!is.null(fallback)) {
+    return(deserialize_par3d(normalize_view(fallback)))
   }
 
   last_par3d()
@@ -482,6 +518,11 @@ current_pose_input <- function(x = NULL, fallback = NULL) {
 current_scene_state_input <- function(x = NULL, fallback = NULL) {
   if (!is.null(x) && nzchar(x)) {
     return(normalize_scene_state(jsonlite::fromJSON(x, simplifyVector = FALSE)))
+  }
+
+  live <- last_scene_state()
+  if (!is.null(live)) {
+    return(normalize_scene_state(live))
   }
 
   if (!is.null(fallback)) {
@@ -1192,7 +1233,13 @@ run_pose_gadget <- function(widget) {
     return(invisible(NULL))
   }
 
-  par3d(zoom = result$zoom, userMatrix = result$userMatrix)
+  par3d(
+    zoom = result$zoom,
+    userMatrix = result$userMatrix,
+    bg = result$bg %||% NULL,
+    windowRect = result$windowRect %||% NULL
+  )
+  result
 }
 
 run_scene_editor_gadget <- function(widget) {
@@ -1281,6 +1328,10 @@ run_scene_editor_gadget <- function(widget) {
 
     shiny::observeEvent(input$done, {
       state <- current_scene_state_input(input[[scene_state_input]], fallback = initial_state)
+      live_par3d <- last_par3d(live = TRUE)
+      if (!is.null(live_par3d)) {
+        state$view <- normalize_view(serialize_par3d(live_par3d))
+      }
       set_last_scene_state(state)
       shiny::stopApp(TRUE)
     })
