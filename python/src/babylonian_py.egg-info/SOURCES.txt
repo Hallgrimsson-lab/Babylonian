@@ -16,4 +16,7 @@ src/babylonian_py.egg-info/requires.txt
 src/babylonian_py.egg-info/top_level.txt
 tests/test_edit_scene_snapshot_request.py
 tests/test_payload_compat.py
+tests/test_scene_builder_api.py
+tests/test_scene_primitives_and_effects.py
 tests/test_snapshot3d_offline.py
+tests/test_vendored_js_sync.py

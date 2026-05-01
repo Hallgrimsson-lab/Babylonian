@@ -177,6 +177,149 @@ def _normalize_matrix4(value: Sequence[Sequence[float]], *, name: str) -> list[l
     return [[float(x) for x in row] for row in rows]
 
 
+def _normalize_xyz_points(
+    x: Any,
+    y: Any = None,
+    z: Any = None,
+    *,
+    name: str = "points",
+) -> list[list[float]]:
+    if y is None and z is None:
+        rows = _as_list(x)
+        if not rows:
+            raise ValueError(f"`{name}` cannot be empty.")
+        if len(rows[0]) != 3:
+            raise ValueError(f"`{name}` must have shape (n, 3).")
+        return [[float(row[0]), float(row[1]), float(row[2])] for row in rows]
+
+    if y is None or z is None:
+        raise ValueError(f"Pass either a single (n, 3) array for `{name}` or all of `x`, `y`, and `z`.")
+
+    xs = _as_list(x)
+    ys = _as_list(y)
+    zs = _as_list(z)
+    if not xs or not ys or not zs:
+        raise ValueError(f"`{name}` cannot be empty.")
+    if not (len(xs) == len(ys) == len(zs)):
+        raise ValueError(f"`{name}` coordinates must have matching lengths.")
+    return [[float(xv), float(yv), float(zv)] for xv, yv, zv in zip(xs, ys, zs)]
+
+
+def _normalize_color_sequence(
+    value: str | Sequence[str],
+    *,
+    n: int,
+    name: str = "color",
+) -> str | list[str]:
+    if isinstance(value, str):
+        return _normalize_color(value)
+    values = [_normalize_color(item) for item in _as_list(value)]
+    if len(values) != n:
+        raise ValueError(f"`{name}` must have length {n}.")
+    return values
+
+
+def _normalize_scalar(value: Any, *, name: str, lower: float | None = None) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"`{name}` must be numeric.")
+    if lower is not None and numeric < lower:
+        raise ValueError(f"`{name}` must be >= {lower}.")
+    return numeric
+
+
+def _normalize_unit_interval(value: Any, *, name: str) -> float:
+    numeric = _normalize_scalar(value, name=name, lower=0)
+    if numeric > 1:
+        raise ValueError(f"`{name}` must be <= 1.")
+    return numeric
+
+
+def _normalize_postprocesses(value: Any) -> list[dict[str, Any]] | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return [_normalize_postprocess(value)]
+    values = _as_list(value)
+    return [_normalize_postprocess(item) for item in values]
+
+
+def _normalize_postprocess(value: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise TypeError("Postprocess descriptors must be dicts.")
+    effect_type = str(value.get("type") or "").lower()
+    if effect_type != "depth_of_field":
+        raise ValueError(f"Unsupported postprocess type: {effect_type or '<empty>'}")
+    blur_level = str(value.get("blur_level", "low")).lower()
+    if blur_level not in {"low", "medium", "high"}:
+        raise ValueError("`blur_level` must be one of 'low', 'medium', or 'high'.")
+
+    out: dict[str, Any] = {
+        "type": "depth_of_field",
+        "blur_level": blur_level,
+    }
+    for key in ("focus_distance", "f_stop", "focal_length"):
+        if value.get(key) is not None:
+            out[key] = _normalize_scalar(value.get(key), name=key)
+    return out
+
+
+def _normalize_clipping_dict(
+    *,
+    enabled: bool = True,
+    x: float,
+    y: float,
+    z: float,
+    material: str | None = None,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "enabled": bool(enabled),
+        "x": float(x),
+        "y": float(y),
+        "z": float(z),
+    }
+    if material is not None:
+        out["material"] = str(material)
+    return out
+
+
+def _normalize_material(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return material_ref3d(value)
+    if not isinstance(value, dict):
+        raise TypeError("`material` must be a material descriptor dict or a material name string.")
+
+    material_type = str(value.get("type") or "").lower()
+    if material_type == "standard":
+        return standard_material3d(
+            diffuse=value.get("diffuse", "white"),
+            specular=value.get("specular", "#000000"),
+            emissive=value.get("emissive"),
+            alpha=value.get("alpha"),
+            wireframe=bool(value.get("wireframe", False)),
+            backface_culling=bool(value.get("backface_culling", False)),
+            name=value.get("name"),
+        )
+    if material_type == "pbr":
+        return pbr_material3d(
+            base_color=value.get("base_color", "white"),
+            metallic=value.get("metallic", 0),
+            roughness=value.get("roughness", 1),
+            emissive=value.get("emissive"),
+            alpha=value.get("alpha"),
+            wireframe=bool(value.get("wireframe", False)),
+            backface_culling=bool(value.get("backface_culling", False)),
+            unlit=bool(value.get("unlit", False)),
+            name=value.get("name"),
+        )
+    if material_type == "material_ref":
+        return material_ref3d(value.get("name"))
+    raise ValueError(f"Unsupported material type: {material_type or '<empty>'}")
+
+
 def _normalize_title_dict(
     *,
     main: Optional[str] = None,
@@ -404,6 +547,7 @@ class Scene:
         specularity: Optional[str] = "#000000",
         name: Optional[str] = None,
         wireframe: bool = False,
+        material: Any = None,
         reverse_winding: bool = True,
     ) -> "Scene":
         return self.add(
@@ -416,6 +560,7 @@ class Scene:
                 specularity=specularity,
                 name=name,
                 wireframe=wireframe,
+                material=material,
                 reverse_winding=reverse_winding,
             )
         )
@@ -429,6 +574,11 @@ class Scene:
         intensity: float = 1.0,
         diffuse: Optional[str] = None,
         specular: Optional[str] = None,
+        ground_color: Optional[str] = None,
+        angle: Optional[float] = None,
+        exponent: Optional[float] = None,
+        range: Optional[float] = None,
+        enabled: bool = True,
         name: Optional[str] = None,
     ) -> "Scene":
         return self.add(
@@ -439,9 +589,193 @@ class Scene:
                 intensity=intensity,
                 diffuse=diffuse,
                 specular=specular,
+                ground_color=ground_color,
+                angle=angle,
+                exponent=exponent,
+                range=range,
+                enabled=enabled,
                 name=name,
             )
         )
+
+    def add_point_light(
+        self,
+        *,
+        position: Sequence[float] = (0, 1, 0),
+        intensity: float = 1.0,
+        diffuse: Optional[str] = None,
+        specular: Optional[str] = None,
+        range: Optional[float] = None,
+        enabled: bool = True,
+        name: Optional[str] = None,
+    ) -> "Scene":
+        return self.add_light(
+            type="point",
+            position=position,
+            intensity=intensity,
+            diffuse=diffuse,
+            specular=specular,
+            range=range,
+            enabled=enabled,
+            name=name,
+        )
+
+    def add_directional_light(
+        self,
+        *,
+        direction: Sequence[float] = (0, -1, 0),
+        position: Optional[Sequence[float]] = None,
+        intensity: float = 1.0,
+        diffuse: Optional[str] = None,
+        specular: Optional[str] = None,
+        range: Optional[float] = None,
+        enabled: bool = True,
+        name: Optional[str] = None,
+    ) -> "Scene":
+        return self.add_light(
+            type="directional",
+            direction=direction,
+            position=position,
+            intensity=intensity,
+            diffuse=diffuse,
+            specular=specular,
+            range=range,
+            enabled=enabled,
+            name=name,
+        )
+
+    def add_spot_light(
+        self,
+        *,
+        position: Sequence[float] = (0, 1, 0),
+        direction: Sequence[float] = (0, -1, 0),
+        intensity: float = 1.0,
+        diffuse: Optional[str] = None,
+        specular: Optional[str] = None,
+        angle: float = 3.141592653589793 / 3,
+        exponent: float = 1.0,
+        range: Optional[float] = None,
+        enabled: bool = True,
+        name: Optional[str] = None,
+    ) -> "Scene":
+        return self.add_light(
+            type="spot",
+            position=position,
+            direction=direction,
+            intensity=intensity,
+            diffuse=diffuse,
+            specular=specular,
+            angle=angle,
+            exponent=exponent,
+            range=range,
+            enabled=enabled,
+            name=name,
+        )
+
+    def add_hemispheric_light(
+        self,
+        *,
+        direction: Sequence[float] = (0, 1, 0),
+        intensity: float = 1.0,
+        diffuse: Optional[str] = None,
+        specular: Optional[str] = None,
+        ground_color: Optional[str] = None,
+        enabled: bool = True,
+        name: Optional[str] = None,
+    ) -> "Scene":
+        return self.add_light(
+            type="hemispheric",
+            direction=direction,
+            intensity=intensity,
+            diffuse=diffuse,
+            specular=specular,
+            ground_color=ground_color,
+            enabled=enabled,
+            name=name,
+        )
+
+    def add_points(
+        self,
+        x: Any,
+        y: Any = None,
+        z: Any = None,
+        *,
+        color: str | Sequence[str] = "black",
+        size: float = 0.02,
+        alpha: float = 1.0,
+    ) -> "Scene":
+        return self.add(points3d(x, y=y, z=z, color=color, size=size, alpha=alpha))
+
+    def add_spheres(
+        self,
+        x: Any,
+        y: Any = None,
+        z: Any = None,
+        *,
+        radius: float = 0.03,
+        color: str | Sequence[str] = "gray40",
+        alpha: float = 1.0,
+        specularity: str = "#000000",
+    ) -> "Scene":
+        return self.add(
+            spheres3d(
+                x,
+                y=y,
+                z=z,
+                radius=radius,
+                color=color,
+                alpha=alpha,
+                specularity=specularity,
+            )
+        )
+
+    def add_segments(
+        self,
+        x: Any,
+        y: Any = None,
+        z: Any = None,
+        *,
+        color: str | Sequence[str] = "black",
+        alpha: float = 1.0,
+        width: float = 1.0,
+    ) -> "Scene":
+        return self.add(
+            segments3d(x, y=y, z=z, color=color, alpha=alpha, width=width)
+        )
+
+    def add_lines(
+        self,
+        x: Any,
+        y: Any = None,
+        z: Any = None,
+        *,
+        color: str = "black",
+        alpha: float = 1.0,
+        width: float = 1.0,
+    ) -> "Scene":
+        return self.add(lines3d(x, y=y, z=z, color=color, alpha=alpha, width=width))
+
+    def add_text(
+        self,
+        x: Any,
+        y: Any = None,
+        z: Any = None,
+        *,
+        texts: str | Sequence[str],
+        color: str = "black",
+        cex: float = 1.0,
+    ) -> "Scene":
+        return self.add(text3d(x, y=y, z=z, texts=texts, color=color, cex=cex))
+
+    def add_plane(
+        self,
+        coefficients: Sequence[float],
+        *,
+        color: str = "gray70",
+        alpha: float = 0.4,
+        size: float | None = None,
+    ) -> "Scene":
+        return self.add(planes3d(coefficients, color=color, alpha=alpha, size=size))
 
     def add_model(
         self,
@@ -467,6 +801,30 @@ class Scene:
                 preserve_materials=preserve_materials,
             )
         )
+
+    def with_material(self, name: str, material: Any) -> "Scene":
+        if not isinstance(name, str) or not name:
+            raise ValueError("`name` must be a non-empty string.")
+        materials = deepcopy(self.scene.get("materials", {}))
+        materials[name] = _normalize_material(material)
+        self.scene["materials"] = materials
+        return self
+
+    def with_materials(self, materials: dict[str, Any]) -> "Scene":
+        if not isinstance(materials, dict):
+            raise TypeError("`materials` must be a dict.")
+        for name, material in materials.items():
+            self.with_material(name, material)
+        return self
+
+    def add_lighting_preset(
+        self,
+        preset: str = "three_point",
+        *,
+        center: Sequence[float] = (0, 0, 0),
+        radius: float = 1.0,
+    ) -> "Scene":
+        return self.add(*lighting_preset3d(preset, center=center, radius=radius))
 
     def with_axes(self, axes: bool = True, *, nticks: Optional[int] = None) -> "Scene":
         self.scene["axes"] = bool(axes)
@@ -502,6 +860,28 @@ class Scene:
             view["camera"] = next_camera
         self.scene["view"] = view
         return self
+
+    def with_background(self, color: str) -> "Scene":
+        return self.with_view(bg=color)
+
+    def with_camera(
+        self,
+        *,
+        alpha: Optional[float] = None,
+        beta: Optional[float] = None,
+        radius: Optional[float] = None,
+        target: Optional[Sequence[float]] = None,
+    ) -> "Scene":
+        camera: dict[str, Any] = {}
+        if alpha is not None:
+            camera["alpha"] = float(alpha)
+        if beta is not None:
+            camera["beta"] = float(beta)
+        if radius is not None:
+            camera["radius"] = float(radius)
+        if target is not None:
+            camera["target"] = list(target)
+        return self.with_view(camera=camera)
 
     def with_title(
         self,
@@ -547,6 +927,50 @@ class Scene:
         )
         return self
 
+    def with_postprocess(self, *effects: dict[str, Any]) -> "Scene":
+        if not effects:
+            self.scene["postprocess"] = []
+        else:
+            self.scene["postprocess"] = _normalize_postprocesses(list(effects))
+        return self
+
+    def with_depth_of_field(
+        self,
+        *,
+        focus_distance: float | None = None,
+        f_stop: float | None = None,
+        focal_length: float | None = None,
+        blur_level: str = "low",
+    ) -> "Scene":
+        effect = dof3d(
+            focus_distance=focus_distance,
+            f_stop=f_stop,
+            focal_length=focal_length,
+            blur_level=blur_level,
+        )
+        effects = list(self.scene.get("postprocess") or [])
+        effects.append(effect)
+        self.scene["postprocess"] = effects
+        return self
+
+    def with_clipping(
+        self,
+        *,
+        x: float,
+        y: float,
+        z: float,
+        material: str | None = None,
+        enabled: bool = True,
+    ) -> "Scene":
+        self.scene["clipping"] = _normalize_clipping_dict(
+            enabled=enabled,
+            x=x,
+            y=y,
+            z=z,
+            material=material,
+        )
+        return self
+
     def show(
         self,
         *,
@@ -569,6 +993,51 @@ class Scene:
     ) -> Path:
         widget = BabylonHTMLWidget(scene=self, width=width, height=height)
         return widget.save_html(path)
+
+    def snapshot(
+        self,
+        filename: str | Path = "snapshot3d.png",
+        *,
+        timeout: float = 10.0,
+        vwidth: Optional[int] = None,
+        vheight: Optional[int] = None,
+        delay: float = 0.5,
+    ) -> Path:
+        return snapshot3d(
+            filename,
+            widget=self,
+            timeout=timeout,
+            vwidth=vwidth,
+            vheight=vheight,
+            delay=delay,
+        )
+
+    def pose(
+        self,
+        *,
+        width: int = 900,
+        height: int = 700,
+    ) -> "BabylonWidget":
+        from .interaction import create_pose_3d
+
+        return create_pose_3d(self, width=width, height=height)
+
+    def edit(
+        self,
+        *,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        renderer: Optional[str] = None,
+    ) -> Any:
+        from .interaction import edit_scene3d
+
+        widget = edit_scene3d(
+            self,
+            width=width,
+            height=height,
+            renderer=renderer,
+        )
+        return widget
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -1109,6 +1578,7 @@ def as_babylon_mesh(
     specularity: Optional[str] = "#000000",
     name: Optional[str] = None,
     wireframe: bool = False,
+    material: Any = None,
     reverse_winding: bool = True,
 ) -> dict[str, Any]:
     flat_vertices, flat_indices = _normalize_vertices_faces(
@@ -1132,6 +1602,8 @@ def as_babylon_mesh(
         mesh["specularity"] = _normalize_color(specularity)
     if wireframe:
         mesh["wireframe"] = True
+    if material is not None:
+        mesh["material"] = _normalize_material(material)
     return mesh
 
 
@@ -1143,24 +1615,352 @@ def light3d(
     intensity: float = 1.0,
     diffuse: Optional[str] = None,
     specular: Optional[str] = None,
+    ground_color: Optional[str] = None,
+    angle: Optional[float] = None,
+    exponent: Optional[float] = None,
+    range: Optional[float] = None,
+    enabled: bool = True,
     name: Optional[str] = None,
 ) -> dict[str, Any]:
+    light_type = str(type).lower()
+    if light_type not in {"hemispheric", "point", "directional", "spot"}:
+        raise ValueError("`type` must be one of 'hemispheric', 'point', 'directional', or 'spot'.")
     primitive = {
         "type": "light3d",
-        "light_type": type,
-        "intensity": float(intensity),
+        "light_type": light_type,
+        "intensity": _normalize_scalar(intensity, name="intensity", lower=0),
+        "enabled": bool(enabled),
     }
     if name is not None:
         primitive["name"] = str(name)
     if position is not None:
-        primitive["position"] = [float(x) for x in position]
+        primitive["position"] = _normalize_vector3(position, name="position")
     if direction is not None:
-        primitive["direction"] = [float(x) for x in direction]
+        primitive["direction"] = _normalize_vector3(direction, name="direction")
     if diffuse is not None:
         primitive["diffuse"] = _normalize_color(diffuse)
     if specular is not None:
         primitive["specular"] = _normalize_color(specular)
+    if ground_color is not None:
+        primitive["ground_color"] = _normalize_color(ground_color)
+    if angle is not None:
+        primitive["angle"] = _normalize_scalar(angle, name="angle", lower=0)
+    if exponent is not None:
+        primitive["exponent"] = _normalize_scalar(exponent, name="exponent", lower=0)
+    if range is not None:
+        primitive["range"] = _normalize_scalar(range, name="range", lower=0)
     return primitive
+
+
+def as_babylon_light(**kwargs: Any) -> dict[str, Any]:
+    return light3d(**kwargs)
+
+
+def light3d_point(**kwargs: Any) -> dict[str, Any]:
+    return light3d(type="point", **kwargs)
+
+
+def light3d_directional(**kwargs: Any) -> dict[str, Any]:
+    return light3d(type="directional", **kwargs)
+
+
+def light3d_spot(**kwargs: Any) -> dict[str, Any]:
+    return light3d(type="spot", **kwargs)
+
+
+def light3d_hemispheric(**kwargs: Any) -> dict[str, Any]:
+    return light3d(type="hemispheric", **kwargs)
+
+
+def standard_material3d(
+    *,
+    diffuse: str = "white",
+    specular: str = "#000000",
+    emissive: Optional[str] = None,
+    alpha: Optional[float] = None,
+    wireframe: bool = False,
+    backface_culling: bool = False,
+    name: Optional[str] = None,
+) -> dict[str, Any]:
+    material: dict[str, Any] = {
+        "type": "standard",
+        "diffuse": _normalize_color(diffuse),
+        "specular": _normalize_color(specular),
+        "wireframe": bool(wireframe),
+        "backface_culling": bool(backface_culling),
+    }
+    if emissive is not None:
+        material["emissive"] = _normalize_color(emissive)
+    if alpha is not None:
+        material["alpha"] = _normalize_unit_interval(alpha, name="alpha")
+    if name is not None:
+        material["name"] = str(name)
+    return material
+
+
+def pbr_material3d(
+    *,
+    base_color: str = "white",
+    metallic: float = 0,
+    roughness: float = 1,
+    emissive: Optional[str] = None,
+    alpha: Optional[float] = None,
+    wireframe: bool = False,
+    backface_culling: bool = False,
+    unlit: bool = False,
+    name: Optional[str] = None,
+) -> dict[str, Any]:
+    material: dict[str, Any] = {
+        "type": "pbr",
+        "base_color": _normalize_color(base_color),
+        "metallic": _normalize_unit_interval(metallic, name="metallic"),
+        "roughness": _normalize_unit_interval(roughness, name="roughness"),
+        "wireframe": bool(wireframe),
+        "backface_culling": bool(backface_culling),
+        "unlit": bool(unlit),
+    }
+    if emissive is not None:
+        material["emissive"] = _normalize_color(emissive)
+    if alpha is not None:
+        material["alpha"] = _normalize_unit_interval(alpha, name="alpha")
+    if name is not None:
+        material["name"] = str(name)
+    return material
+
+
+def material_ref3d(name: str) -> dict[str, Any]:
+    if not isinstance(name, str) or not name:
+        raise ValueError("`name` must be a non-empty string.")
+    return {
+        "type": "material_ref",
+        "name": name,
+    }
+
+
+def lighting_preset3d(
+    preset: str = "three_point",
+    *,
+    center: Sequence[float] = (0, 0, 0),
+    radius: float = 1.0,
+) -> list[dict[str, Any]]:
+    preset_name = str(preset).lower()
+    if preset_name not in {"three_point", "rembrandt", "butterfly", "split"}:
+        raise ValueError("Unsupported lighting preset.")
+
+    center_vec = _normalize_vector3(center, name="center")
+    radius_value = _normalize_scalar(radius, name="radius", lower=0)
+
+    def at(x: float, y: float, z: float) -> list[float]:
+        return [
+            center_vec[0] + x * radius_value,
+            center_vec[1] + y * radius_value,
+            center_vec[2] + z * radius_value,
+        ]
+
+    def toward_center(position: Sequence[float]) -> list[float]:
+        return [
+            center_vec[0] - float(position[0]),
+            center_vec[1] - float(position[1]),
+            center_vec[2] - float(position[2]),
+        ]
+
+    if preset_name == "rembrandt":
+        key = at(0.9, 1.1, 1.0)
+        fill = at(-0.9, 0.35, 0.9)
+        rim = at(0.2, 0.9, -1.2)
+        return [
+            light3d_spot(name="rembrandt_key", position=key, direction=toward_center(key), intensity=1.2, diffuse="#FFF4DD", specular="#FFFFFF", angle=3.141592653589793 / 3, exponent=1),
+            light3d_point(name="rembrandt_fill", position=fill, intensity=0.35, diffuse="#DCEBFF", specular="#FFFFFF"),
+            light3d_point(name="rembrandt_rim", position=rim, intensity=0.55, diffuse="#FFFFFF", specular="#FFFFFF"),
+        ]
+    if preset_name == "butterfly":
+        key = at(0, 1.35, 1.1)
+        fill = at(0, -0.25, 1.0)
+        rim = at(0, 0.7, -1.1)
+        return [
+            light3d_spot(name="butterfly_key", position=key, direction=toward_center(key), intensity=1.25, diffuse="#FFF4DD", specular="#FFFFFF", angle=3.141592653589793 / 3, exponent=1),
+            light3d_point(name="butterfly_fill", position=fill, intensity=0.3, diffuse="#FFFFFF", specular="#FFFFFF"),
+            light3d_point(name="butterfly_rim", position=rim, intensity=0.4, diffuse="#EEF2FF", specular="#FFFFFF"),
+        ]
+    if preset_name == "split":
+        key = at(1.2, 0.4, 0.9)
+        rim = at(-1.0, 0.8, -1.0)
+        return [
+            light3d_spot(name="split_key", position=key, direction=toward_center(key), intensity=1.15, diffuse="#FFF4DD", specular="#FFFFFF", angle=3.141592653589793 / 3, exponent=1),
+            light3d_point(name="split_rim", position=rim, intensity=0.25, diffuse="#DCEBFF", specular="#FFFFFF"),
+        ]
+
+    key = at(1.0, 1.0, 1.1)
+    fill = at(-1.1, 0.5, 0.9)
+    rim = at(0.1, 0.9, -1.3)
+    return [
+        light3d_spot(name="three_point_key", position=key, direction=toward_center(key), intensity=1.2, diffuse="#FFF4DD", specular="#FFFFFF", angle=3.141592653589793 / 3, exponent=1),
+        light3d_point(name="three_point_fill", position=fill, intensity=0.45, diffuse="#DCEBFF", specular="#FFFFFF"),
+        light3d_point(name="three_point_rim", position=rim, intensity=0.65, diffuse="#FFFFFF", specular="#FFFFFF"),
+    ]
+
+
+def points3d(
+    x: Any,
+    y: Any = None,
+    z: Any = None,
+    *,
+    color: str | Sequence[str] = "black",
+    size: float = 0.02,
+    alpha: float = 1.0,
+) -> dict[str, Any]:
+    points = _normalize_xyz_points(x, y, z, name="points")
+    return {
+        "type": "points3d",
+        "points": points,
+        "color": _normalize_color_sequence(color, n=len(points)),
+        "size": _normalize_scalar(size, name="size", lower=0),
+        "alpha": _normalize_scalar(alpha, name="alpha", lower=0),
+    }
+
+
+def spheres3d(
+    x: Any,
+    y: Any = None,
+    z: Any = None,
+    *,
+    radius: float = 0.03,
+    color: str | Sequence[str] = "gray40",
+    alpha: float = 1.0,
+    specularity: str = "#000000",
+) -> dict[str, Any]:
+    points = _normalize_xyz_points(x, y, z, name="points")
+    return {
+        "type": "spheres3d",
+        "points": points,
+        "radius": _normalize_scalar(radius, name="radius", lower=0),
+        "color": _normalize_color_sequence(color, n=len(points)),
+        "alpha": _normalize_scalar(alpha, name="alpha", lower=0),
+        "specularity": _normalize_color(specularity),
+    }
+
+
+def segments3d(
+    x: Any,
+    y: Any = None,
+    z: Any = None,
+    *,
+    color: str | Sequence[str] = "black",
+    alpha: float = 1.0,
+    width: float = 1.0,
+) -> dict[str, Any]:
+    points = _normalize_xyz_points(x, y, z, name="points")
+    if len(points) % 2 != 0:
+        raise ValueError("`segments3d()` requires an even number of points.")
+    return {
+        "type": "segments3d",
+        "points": points,
+        "color": _normalize_color_sequence(color, n=len(points) // 2),
+        "alpha": _normalize_scalar(alpha, name="alpha", lower=0),
+        "width": _normalize_scalar(width, name="width", lower=0),
+    }
+
+
+def lines3d(
+    x: Any,
+    y: Any = None,
+    z: Any = None,
+    *,
+    color: str = "black",
+    alpha: float = 1.0,
+    width: float = 1.0,
+) -> dict[str, Any]:
+    points = _normalize_xyz_points(x, y, z, name="points")
+    if len(points) < 2:
+        raise ValueError("`lines3d()` requires at least two points.")
+    return {
+        "type": "lines3d",
+        "points": points,
+        "color": _normalize_color(color),
+        "alpha": _normalize_scalar(alpha, name="alpha", lower=0),
+        "width": _normalize_scalar(width, name="width", lower=0),
+    }
+
+
+def text3d(
+    x: Any,
+    y: Any = None,
+    z: Any = None,
+    *,
+    texts: str | Sequence[str],
+    color: str = "black",
+    cex: float = 1.0,
+) -> dict[str, Any]:
+    points = _normalize_xyz_points(x, y, z, name="points")
+    labels = [str(item) for item in ([texts] if isinstance(texts, str) else _as_list(texts))]
+    if len(labels) == 1 and len(points) > 1:
+        labels = labels * len(points)
+    if len(labels) != len(points):
+        raise ValueError("`text3d()` requires one label per point.")
+    return {
+        "type": "text3d",
+        "points": points,
+        "texts": labels,
+        "color": _normalize_color(color),
+        "cex": _normalize_scalar(cex, name="cex", lower=0),
+    }
+
+
+def planes3d(
+    coefficients: Sequence[float] | Sequence[Sequence[float]],
+    *,
+    color: str = "gray70",
+    alpha: float = 0.4,
+    size: float | None = None,
+) -> dict[str, Any]:
+    rows = _as_list(coefficients)
+    if not rows:
+        raise ValueError("`coefficients` cannot be empty.")
+    if isinstance(rows[0], (list, tuple)):
+        coeff_rows = [list(row) for row in rows]
+        if any(len(row) != 4 for row in coeff_rows):
+            raise ValueError("Plane coefficients must have shape (n, 4).")
+        normalized_coeffs: list[list[float]] | list[float] = [
+            [float(value) for value in row] for row in coeff_rows
+        ]
+    else:
+        if len(rows) != 4:
+            raise ValueError("A single plane requires exactly 4 coefficients.")
+        normalized_coeffs = [float(value) for value in rows]
+
+    primitive: dict[str, Any] = {
+        "type": "planes3d",
+        "coefficients": normalized_coeffs,
+        "color": _normalize_color(color),
+        "alpha": _normalize_scalar(alpha, name="alpha", lower=0),
+    }
+    if size is not None:
+        primitive["size"] = _normalize_scalar(size, name="size", lower=0)
+    return primitive
+
+
+def dof3d(
+    *,
+    focus_distance: float | None = None,
+    f_stop: float | None = None,
+    focal_length: float | None = None,
+    blur_level: str = "low",
+) -> dict[str, Any]:
+    spec: dict[str, Any] = {
+        "type": "depth_of_field",
+        "blur_level": blur_level,
+    }
+    if focus_distance is not None:
+        spec["focus_distance"] = focus_distance
+    if f_stop is not None:
+        spec["f_stop"] = f_stop
+    if focal_length is not None:
+        spec["focal_length"] = focal_length
+    return _normalize_postprocess(spec)
+
+
+def postprocess3d(type: str, **kwargs: Any) -> dict[str, Any]:
+    return _normalize_postprocess({"type": type, **kwargs})
 
 
 def render_scene3d(
