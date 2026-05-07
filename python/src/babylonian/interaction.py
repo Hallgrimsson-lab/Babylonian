@@ -10,11 +10,14 @@ from typing import Any, Optional
 from .core import (
     _CURRENT_SCENE,
     _display_in_notebook,
+    _normalize_imported_mesh_target,
     _scene_from_object,
     anywidget,
     BabylonWidget,
+    replace_model_geometry3d,
     render_scene3d,
     Scene,
+    set_model_material3d,
     snapshot3d,
 )
 
@@ -23,7 +26,7 @@ _ACTIVE_EDITOR: Optional[Any] = None
 
 
 def _editable_mesh_primitive_types() -> set[str]:
-    return {"sphere", "box", "plane", "cylinder", "cone", "mesh3d"}
+    return {"sphere", "box", "plane", "cylinder", "cone", "mesh3d", "asset3d"}
 
 
 def _coerce_transform_vector(
@@ -104,6 +107,8 @@ def _seed_scene_state_entry(obj: Any, index: int) -> Optional[dict[str, Any]]:
         entry["position"] = _coerce_transform_vector(obj.get("position"), (0.0, 0.0, 0.0))
         entry["rotation"] = _coerce_transform_vector(obj.get("rotation"), (0.0, 0.0, 0.0))
         entry["scaling"] = _coerce_transform_vector(obj.get("scaling"), (1.0, 1.0, 1.0))
+        if primitive_type == "asset3d":
+            entry["asset_name"] = obj.get("name")
         if obj.get("show_bounding_box") is not None:
             entry["show_bounding_box"] = bool(obj.get("show_bounding_box"))
         if obj.get("material") is not None:
@@ -256,10 +261,41 @@ def _merge_morph_target_edits(
     return merged
 
 
+def _apply_imported_asset_scene_state_entry(
+    obj: dict[str, Any],
+    entry: dict[str, Any],
+) -> dict[str, Any]:
+    updated = deepcopy(obj)
+    imported_target = _normalize_imported_mesh_target(entry.get("imported_mesh_target"))
+
+    if imported_target is None:
+        for field, default in (
+            ("position", (0.0, 0.0, 0.0)),
+            ("rotation", (0.0, 0.0, 0.0)),
+            ("scaling", (1.0, 1.0, 1.0)),
+        ):
+            if entry.get(field) is not None:
+                updated[field] = _coerce_transform_vector(entry.get(field), default)
+        if entry.get("show_bounding_box") is not None:
+            updated["show_bounding_box"] = bool(entry.get("show_bounding_box"))
+        if entry.get("material") is not None:
+            updated = set_model_material3d(updated, entry.get("material"))
+        return updated
+
+    if entry.get("material") is not None:
+        updated = set_model_material3d(updated, entry.get("material"), target=imported_target)
+    if entry.get("geometry_override") is not None:
+        updated = replace_model_geometry3d(updated, entry.get("geometry_override"), target=imported_target)
+    return updated
+
+
 def _apply_scene_state_entry(
     obj: dict[str, Any],
     entry: dict[str, Any],
 ) -> dict[str, Any]:
+    if obj.get("type") == "asset3d" or entry.get("asset_name") is not None:
+        return _apply_imported_asset_scene_state_entry(obj, entry)
+
     updated = deepcopy(obj)
 
     for field, default in (
@@ -350,7 +386,17 @@ def _apply_scene_state_to_objects(
                 edited.pop(idx)
 
     for entry in edits:
-        idx = _locate_scene_state_object(edited, entry)
+        idx = None
+        if entry.get("asset_name") is not None:
+            matches = [
+                obj_idx
+                for obj_idx, obj in enumerate(edited)
+                if isinstance(obj, dict) and obj.get("type") == "asset3d" and obj.get("name") == entry.get("asset_name")
+            ]
+            if len(matches) == 1:
+                idx = matches[0]
+        if idx is None:
+            idx = _locate_scene_state_object(edited, entry)
         if idx is None:
             created = _create_scene_object_from_state(entry)
             if created is not None:
@@ -647,6 +693,13 @@ def apply_scene_state(
         scene = _CURRENT_SCENE
     if scene is None:
         raise ValueError("No active scene. Pass scene=, or build a scene first.")
+
+    if isinstance(state, dict) and _is_full_payload(state):
+        return Scene(
+            objects=deepcopy(state.get("objects", [])),
+            scene=deepcopy(state.get("scene", {})),
+            interaction=deepcopy(state.get("interaction")),
+        )
 
     result = _coerce_scene(scene, **kwargs)
     norm = _normalize_state(state)

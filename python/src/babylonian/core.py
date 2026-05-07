@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import uuid
 from typing import Any, Iterable, Optional, Sequence
+import warnings
 
 try:
     import anywidget
@@ -46,6 +47,18 @@ _WIDGET_JS: str = (Path(__file__).with_name("widget.js")).read_text(encoding="ut
 # HTMLWidgets shim to provide the full rendering engine (editor, gizmos, etc.).
 _BABYLON_WIDGET_JS: str = (_LIB_DIR / "babylon_widget.js").read_text(encoding="utf-8")
 _SNAPSHOT_CAPTURE_JS = _LIB_DIR / "snapshot_capture.js"
+
+
+def _scene_iframe_limitations(scene: "Scene") -> list[str]:
+    limitations: list[str] = []
+    if scene.interaction is not None:
+        limitations.append("interactive editing/pose tools")
+    if any(
+        isinstance(obj, dict) and obj.get("type") == "mesh3d" and obj.get("morph_target")
+        for obj in scene.objects
+    ):
+        limitations.append("morph target deformation")
+    return limitations
 
 
 def _in_ipython_kernel() -> bool:
@@ -236,6 +249,18 @@ def _normalize_unit_interval(value: Any, *, name: str) -> float:
     return numeric
 
 
+def _normalize_indices(value: Any, *, name: str = "indices") -> list[int]:
+    rows = _as_list(value)
+    if not rows:
+        raise ValueError(f"`{name}` cannot be empty.")
+    if isinstance(rows[0], (list, tuple)):
+        return _flatten_indices(rows, reverse_winding=False)
+    indices = [int(item) for item in rows]
+    if len(indices) % 3 != 0:
+        raise ValueError(f"`{name}` must contain a multiple of 3 entries.")
+    return indices
+
+
 def _normalize_postprocesses(value: Any) -> list[dict[str, Any]] | None:
     if value is None:
         return None
@@ -306,8 +331,13 @@ def _normalize_material(value: Any) -> dict[str, Any] | None:
     if material_type == "pbr":
         return pbr_material3d(
             base_color=value.get("base_color", "white"),
+            base_color_texture=value.get("base_color_texture"),
             metallic=value.get("metallic", 0),
             roughness=value.get("roughness", 1),
+            metallic_roughness_texture=value.get("metallic_roughness_texture"),
+            normal_texture=value.get("normal_texture"),
+            occlusion_texture=value.get("occlusion_texture"),
+            emissive_texture=value.get("emissive_texture"),
             emissive=value.get("emissive"),
             alpha=value.get("alpha"),
             wireframe=bool(value.get("wireframe", False)),
@@ -317,7 +347,182 @@ def _normalize_material(value: Any) -> dict[str, Any] | None:
         )
     if material_type == "material_ref":
         return material_ref3d(value.get("name"))
+    if material_type == "shader":
+        return shader_material3d(
+            name=value.get("name"),
+            vertex=value.get("vertex"),
+            fragment=value.get("fragment"),
+            attributes=value.get("attributes", ("position", "normal")),
+            uniforms=value.get("uniforms"),
+            textures=value.get("textures"),
+            alpha=value.get("alpha"),
+            backface_culling=bool(value.get("backface_culling", False)),
+        )
+    if material_type == "node":
+        return node_material3d(
+            json_value=value.get("source"),
+            params=value.get("params"),
+            alpha=value.get("alpha"),
+            backface_culling=bool(value.get("backface_culling", False)),
+            name=value.get("name"),
+        )
     raise ValueError(f"Unsupported material type: {material_type or '<empty>'}")
+
+
+def _mesh_vertex_rows(mesh: dict[str, Any]) -> list[list[float]]:
+    vertices = mesh.get("vertices")
+    if not isinstance(vertices, list) or len(vertices) % 3 != 0:
+        raise ValueError("Mesh must include a flat `vertices` array.")
+    return [
+        [float(vertices[idx]), float(vertices[idx + 1]), float(vertices[idx + 2])]
+        for idx in range(0, len(vertices), 3)
+    ]
+
+
+def _mesh_index_rows(mesh: dict[str, Any]) -> list[list[int]]:
+    indices = mesh.get("indices")
+    if not isinstance(indices, list) or len(indices) % 3 != 0:
+        raise ValueError("Mesh must include a flat `indices` array.")
+    return [
+        [int(indices[idx]), int(indices[idx + 1]), int(indices[idx + 2])]
+        for idx in range(0, len(indices), 3)
+    ]
+
+
+def _flatten_vertex_rows(rows: Sequence[Sequence[float]]) -> list[float]:
+    return [float(value) for row in rows for value in row]
+
+
+def _geometry_bounds(geometry: dict[str, Any]) -> dict[str, Any]:
+    vertices = _normalize_xyz_points(geometry.get("vertices"), name="vertices")
+    xs = [row[0] for row in vertices]
+    ys = [row[1] for row in vertices]
+    zs = [row[2] for row in vertices]
+    minimum = [min(xs), min(ys), min(zs)]
+    maximum = [max(xs), max(ys), max(zs)]
+    center = [
+        (minimum[0] + maximum[0]) / 2,
+        (minimum[1] + maximum[1]) / 2,
+        (minimum[2] + maximum[2]) / 2,
+    ]
+    radius = max(
+        (
+            ((row[0] - center[0]) ** 2 + (row[1] - center[1]) ** 2 + (row[2] - center[2]) ** 2)
+            ** 0.5
+            for row in vertices
+        ),
+        default=1.0,
+    )
+    if radius <= 0:
+        radius = 1.0
+    return {
+        "min": minimum,
+        "max": maximum,
+        "center": center,
+        "radius": radius,
+    }
+
+
+def _coerce_geometry_target(x: Any, *, target: Any = None) -> tuple[dict[str, Any], int | None, Scene | None]:
+    if isinstance(x, Scene):
+        scene = x.clone()
+        objects = scene.objects
+        if target is None:
+            matches = [idx for idx, obj in enumerate(objects) if isinstance(obj, dict) and obj.get("type") == "mesh3d"]
+            if len(matches) != 1:
+                raise ValueError("Scene contains multiple meshes; pass `target` by name or index.")
+            idx = matches[0]
+        elif isinstance(target, int):
+            idx = target
+        else:
+            matches = [idx for idx, obj in enumerate(objects) if isinstance(obj, dict) and obj.get("name") == target]
+            if len(matches) != 1:
+                raise ValueError("Could not uniquely resolve mesh target in scene.")
+            idx = matches[0]
+        mesh = objects[idx]
+        if mesh.get("type") != "mesh3d":
+            raise ValueError("Target object is not a `mesh3d` mesh.")
+        return deepcopy(mesh), idx, scene
+
+    if isinstance(x, dict) and x.get("type") == "mesh3d":
+        return deepcopy(x), None, None
+
+    raise TypeError("Geometry helpers currently support Babylonian `mesh3d` payloads or `Scene` objects.")
+
+
+def _scene_mesh_indices(scene: Scene, *, target: Any = None) -> list[int]:
+    objects = scene.objects
+    if target is None:
+        return [
+            idx
+            for idx, obj in enumerate(objects)
+            if isinstance(obj, dict) and obj.get("type") == "mesh3d"
+        ]
+    if isinstance(target, int):
+        if target < 0 or target >= len(objects):
+            raise IndexError("Mesh target index is out of range.")
+        if not isinstance(objects[target], dict) or objects[target].get("type") != "mesh3d":
+            raise ValueError("Target object is not a `mesh3d` mesh.")
+        return [target]
+
+    matches = [
+        idx
+        for idx, obj in enumerate(objects)
+        if isinstance(obj, dict)
+        and obj.get("type") == "mesh3d"
+        and obj.get("name") == target
+    ]
+    if not matches:
+        raise ValueError("Could not resolve mesh target in scene.")
+    return matches
+
+
+def _scene_asset_indices(scene: Scene, *, asset: Any = None) -> list[int]:
+    objects = scene.objects
+    asset_indices = [
+        idx
+        for idx, obj in enumerate(objects)
+        if isinstance(obj, dict) and obj.get("type") == "asset3d"
+    ]
+    if asset is None:
+        if len(asset_indices) != 1:
+            raise ValueError("Scene contains multiple imported assets; pass `asset` by name or index.")
+        return asset_indices
+
+    if isinstance(asset, int):
+        if asset < 0 or asset >= len(objects):
+            raise IndexError("Asset index is out of range.")
+        if not isinstance(objects[asset], dict) or objects[asset].get("type") != "asset3d":
+            raise ValueError("Target object is not an `asset3d` object.")
+        return [asset]
+
+    matches = [
+        idx
+        for idx, obj in enumerate(objects)
+        if isinstance(obj, dict) and obj.get("type") == "asset3d" and obj.get("name") == asset
+    ]
+    if not matches:
+        raise ValueError("Could not resolve imported asset in scene.")
+    return matches
+
+
+def _normalize_imported_mesh_target(target: Any) -> Any:
+    if target is None:
+        return None
+    if isinstance(target, (str, int)):
+        return target
+    values = _as_list(target)
+    normalized: list[str | int] = []
+    for entry in values:
+        if isinstance(entry, str):
+            normalized.append(entry)
+        elif isinstance(entry, int):
+            normalized.append(int(entry))
+        else:
+            raise TypeError("Imported mesh targets must be strings, integers, or lists of those values.")
+    if not normalized:
+        raise ValueError("Imported mesh target list cannot be empty.")
+    return normalized
 
 
 def _normalize_title_dict(
@@ -802,6 +1007,67 @@ class Scene:
             )
         )
 
+    def model_info(
+        self,
+        *,
+        asset: Any = None,
+    ) -> dict[str, Any]:
+        return model_info3d(self, asset=asset)
+
+    def set_model_material(
+        self,
+        material: Any,
+        *,
+        asset: Any = None,
+        target: Any = None,
+    ) -> "Scene":
+        result = set_model_material3d(self, material, asset=asset, target=target)
+        if isinstance(result, Scene):
+            self.objects = result.objects
+            self.scene = result.scene
+            self.interaction = result.interaction
+        return self
+
+    def replace_model_geometry(
+        self,
+        geometry: dict[str, Any],
+        *,
+        asset: Any = None,
+        target: Any = None,
+    ) -> "Scene":
+        result = replace_model_geometry3d(self, geometry, asset=asset, target=target)
+        if isinstance(result, Scene):
+            self.objects = result.objects
+            self.scene = result.scene
+            self.interaction = result.interaction
+        return self
+
+    def translate_model_mesh(
+        self,
+        by: Sequence[float],
+        *,
+        asset: Any = None,
+        target: Any = None,
+    ) -> "Scene":
+        return self.replace_model_geometry(
+            translate_geometry3d(extract_model_geometry3d(self, asset=asset, target=target), by),
+            asset=asset,
+            target=target,
+        )
+
+    def scale_model_mesh(
+        self,
+        by: float | Sequence[float],
+        *,
+        asset: Any = None,
+        target: Any = None,
+    ) -> "Scene":
+        return self.replace_model_geometry(
+            scale_geometry3d(extract_model_geometry3d(self, asset=asset, target=target), by),
+            asset=asset,
+            target=target,
+        )
+
     def with_material(self, name: str, material: Any) -> "Scene":
         if not isinstance(name, str) or not name:
             raise ValueError("`name` must be a non-empty string.")
@@ -817,14 +1083,144 @@ class Scene:
             self.with_material(name, material)
         return self
 
+    def with_standard_material(self, name: str, **kwargs: Any) -> "Scene":
+        kwargs.setdefault("name", name)
+        return self.with_material(name, standard_material3d(**kwargs))
+
+    def with_pbr_material(self, name: str, **kwargs: Any) -> "Scene":
+        kwargs.setdefault("name", name)
+        return self.with_material(name, pbr_material3d(**kwargs))
+
+    def with_shader_material(self, name: str, **kwargs: Any) -> "Scene":
+        kwargs.setdefault("name", name)
+        return self.with_material(name, shader_material3d(**kwargs))
+
+    def with_node_material(self, name: str, **kwargs: Any) -> "Scene":
+        kwargs.setdefault("name", name)
+        return self.with_material(name, node_material3d(**kwargs))
+
     def add_lighting_preset(
         self,
         preset: str = "three_point",
         *,
-        center: Sequence[float] = (0, 0, 0),
-        radius: float = 1.0,
+        center: Sequence[float] | None = None,
+        radius: float | None = None,
+        target: Any = None,
     ) -> "Scene":
-        return self.add(*lighting_preset3d(preset, center=center, radius=radius))
+        bounds = None
+        if center is None or radius is None:
+            try:
+                bounds = self.bounds(target=target)
+            except ValueError:
+                bounds = None
+
+        resolved_center = center if center is not None else (
+            bounds["center"] if bounds is not None else [0.0, 0.0, 0.0]
+        )
+        resolved_radius = radius if radius is not None else (
+            bounds["radius"] if bounds is not None else 1.0
+        )
+        return self.add(
+            *lighting_preset3d(
+                preset,
+                center=resolved_center,
+                radius=resolved_radius,
+            )
+        )
+
+    def bounds(
+        self,
+        *,
+        target: Any = None,
+    ) -> dict[str, Any]:
+        return scene_bounds3d(self, target=target)
+
+    def extract_geometry(
+        self,
+        *,
+        target: Any = None,
+    ) -> dict[str, Any]:
+        return extract_geometry3d(self, target=target)
+
+    def replace_geometry(
+        self,
+        geometry: dict[str, Any],
+        *,
+        target: Any = None,
+    ) -> "Scene":
+        result = replace_geometry3d(self, geometry, target=target)
+        if isinstance(result, Scene):
+            self.objects = result.objects
+            self.scene = result.scene
+            self.interaction = result.interaction
+        return self
+
+    def translate_mesh(
+        self,
+        by: Sequence[float],
+        *,
+        target: Any = None,
+    ) -> "Scene":
+        geometry = self.extract_geometry(target=target)
+        return self.replace_geometry(
+            translate_geometry3d(geometry, by),
+            target=target,
+        )
+
+    def scale_mesh(
+        self,
+        by: float | Sequence[float],
+        *,
+        target: Any = None,
+    ) -> "Scene":
+        geometry = self.extract_geometry(target=target)
+        return self.replace_geometry(
+            scale_geometry3d(geometry, by),
+            target=target,
+        )
+
+    def set_mesh_vertices(
+        self,
+        vertices: Any,
+        *,
+        target: Any = None,
+    ) -> "Scene":
+        result = set_vertices3d(self, vertices, target=target)
+        if isinstance(result, Scene):
+            self.objects = result.objects
+            self.scene = result.scene
+            self.interaction = result.interaction
+        return self
+
+    def add_morph_target(
+        self,
+        target_mesh: Any,
+        *,
+        target: Any = None,
+        influence: float = 0,
+        name: str | None = None,
+    ) -> "Scene":
+        mesh, mesh_index, scene = _coerce_geometry_target(self, target=target)
+        updated_mesh = morph_target3d(mesh, target_mesh, influence=influence, name=name)
+        if scene is not None and mesh_index is not None:
+            scene.objects[mesh_index] = updated_mesh
+            self.objects = scene.objects
+            self.scene = scene.scene
+            self.interaction = scene.interaction
+        return self
+
+    def set_mesh_material(
+        self,
+        material: Any,
+        *,
+        target: Any = None,
+    ) -> "Scene":
+        result = set_material3d(self, material, target=target)
+        if isinstance(result, Scene):
+            self.objects = result.objects
+            self.scene = result.scene
+            self.interaction = result.interaction
+        return self
 
     def with_axes(self, axes: bool = True, *, nticks: Optional[int] = None) -> "Scene":
         self.scene["axes"] = bool(axes)
@@ -1514,17 +1910,18 @@ if anywidget is not None and traitlets is not None:  # pragma: no branch
             value = state.get("value", {})
 
             if event_name == "scene_state" and isinstance(value, dict):
-                if "objects" in value or "scene" in value:
+                if "scene" in value or "schema" in value:
                     result = Scene(
                         objects=deepcopy(value.get("objects", self.scene_payload.get("objects", []))),
                         scene=deepcopy(value.get("scene", self.scene_payload.get("scene", {}))),
                         interaction=deepcopy(value.get("interaction", self.scene_payload.get("interaction"))),
                     )
-                elif value.get("view"):
-                    result.scene.setdefault("view", {})
-                    result.scene["view"].update(deepcopy(value["view"]))
+                elif value:
+                    from .interaction import apply_scene_state
 
-            elif isinstance(value, dict) and ("objects" in value or "scene" in value):
+                    result = apply_scene_state(result, state=value)
+
+            elif isinstance(value, dict) and ("scene" in value or "schema" in value):
                 result = Scene(
                     objects=deepcopy(value.get("objects", [])),
                     scene=deepcopy(value.get("scene", {})),
@@ -1701,8 +2098,13 @@ def standard_material3d(
 def pbr_material3d(
     *,
     base_color: str = "white",
+    base_color_texture: Any = None,
     metallic: float = 0,
     roughness: float = 1,
+    metallic_roughness_texture: Any = None,
+    normal_texture: Any = None,
+    occlusion_texture: Any = None,
+    emissive_texture: Any = None,
     emissive: Optional[str] = None,
     alpha: Optional[float] = None,
     wireframe: bool = False,
@@ -1719,12 +2121,97 @@ def pbr_material3d(
         "backface_culling": bool(backface_culling),
         "unlit": bool(unlit),
     }
+    if base_color_texture is not None:
+        material["base_color_texture"] = texture3d(base_color_texture) if isinstance(base_color_texture, str) else deepcopy(base_color_texture)
+    if metallic_roughness_texture is not None:
+        material["metallic_roughness_texture"] = texture3d(metallic_roughness_texture, colorspace="linear") if isinstance(metallic_roughness_texture, str) else deepcopy(metallic_roughness_texture)
+    if normal_texture is not None:
+        material["normal_texture"] = texture3d(normal_texture, colorspace="linear") if isinstance(normal_texture, str) else deepcopy(normal_texture)
+    if occlusion_texture is not None:
+        material["occlusion_texture"] = texture3d(occlusion_texture, colorspace="linear") if isinstance(occlusion_texture, str) else deepcopy(occlusion_texture)
+    if emissive_texture is not None:
+        material["emissive_texture"] = texture3d(emissive_texture, colorspace="srgb") if isinstance(emissive_texture, str) else deepcopy(emissive_texture)
     if emissive is not None:
         material["emissive"] = _normalize_color(emissive)
     if alpha is not None:
         material["alpha"] = _normalize_unit_interval(alpha, name="alpha")
     if name is not None:
         material["name"] = str(name)
+    return material
+
+
+def shader_material3d(
+    *,
+    name: str,
+    vertex: str,
+    fragment: str,
+    attributes: Sequence[str] = ("position", "normal"),
+    uniforms: dict[str, Any] | None = None,
+    textures: dict[str, Any] | None = None,
+    alpha: float | None = None,
+    backface_culling: bool = False,
+) -> dict[str, Any]:
+    if not isinstance(name, str) or not name:
+        raise ValueError("`name` must be a non-empty string.")
+    if not isinstance(vertex, str) or not vertex:
+        raise ValueError("`vertex` must be a non-empty shader source string.")
+    if not isinstance(fragment, str) or not fragment:
+        raise ValueError("`fragment` must be a non-empty shader source string.")
+    attr_values = [str(item) for item in _as_list(attributes)]
+    if not attr_values:
+        raise ValueError("`attributes` must contain at least one attribute name.")
+
+    material: dict[str, Any] = {
+        "type": "shader",
+        "name": name,
+        "vertex": vertex,
+        "fragment": fragment,
+        "attributes": list(dict.fromkeys(attr_values)),
+        "uniforms": deepcopy(uniforms or {}),
+        "textures": deepcopy(textures or {}),
+        "backface_culling": bool(backface_culling),
+    }
+    if alpha is not None:
+        material["alpha"] = _normalize_unit_interval(alpha, name="alpha")
+    return material
+
+
+def node_material3d(
+    *,
+    file: str | None = None,
+    json_value: Any = None,
+    params: dict[str, Any] | None = None,
+    alpha: float | None = None,
+    backface_culling: bool = False,
+    name: str | None = None,
+) -> dict[str, Any]:
+    if file is None and json_value is None:
+        raise ValueError("Supply either `file` or `json_value` to `node_material3d()`.")
+    if file is not None and json_value is not None:
+        raise ValueError("Supply only one of `file` or `json_value` to `node_material3d()`.")
+
+    if file is not None:
+        path = Path(file).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"Node material file not found: {path}")
+        source = json.loads(path.read_text(encoding="utf-8"))
+    elif isinstance(json_value, str):
+        source = json.loads(json_value)
+    else:
+        source = deepcopy(json_value)
+
+    if not isinstance(source, dict):
+        raise TypeError("Node material source must decode to a dict.")
+
+    material: dict[str, Any] = {
+        "type": "node",
+        "source": source,
+        "params": deepcopy(params or {}),
+        "backface_culling": bool(backface_culling),
+        "name": name or str(source.get("name") or "node-material"),
+    }
+    if alpha is not None:
+        material["alpha"] = _normalize_unit_interval(alpha, name="alpha")
     return material
 
 
@@ -1735,6 +2222,63 @@ def material_ref3d(name: str) -> dict[str, Any]:
         "type": "material_ref",
         "name": name,
     }
+
+
+def texture3d(
+    file: str,
+    *,
+    colorspace: str = "auto",
+    level: float | None = None,
+    has_alpha: bool | None = None,
+    invert_y: bool = False,
+    u_scale: float | None = None,
+    v_scale: float | None = None,
+    u_offset: float | None = None,
+    v_offset: float | None = None,
+) -> dict[str, Any]:
+    if not isinstance(file, str) or not file:
+        raise ValueError("`file` must be a non-empty string.")
+
+    colorspace_value = str(colorspace).lower()
+    if colorspace_value not in {"auto", "srgb", "linear"}:
+        raise ValueError("`colorspace` must be one of 'auto', 'srgb', or 'linear'.")
+
+    if file.startswith("data:") or "://" in file:
+        resolved = file
+    else:
+        path = Path(file).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"Texture file not found: {path}")
+        suffix = path.suffix.lower()
+        mime = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+            ".svg": "image/svg+xml",
+        }.get(suffix, "application/octet-stream")
+        resolved = f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
+
+    texture: dict[str, Any] = {
+        "type": "texture",
+        "file": resolved,
+        "colorspace": colorspace_value,
+        "invert_y": bool(invert_y),
+    }
+    if level is not None:
+        texture["level"] = _normalize_scalar(level, name="level")
+    if has_alpha is not None:
+        texture["has_alpha"] = bool(has_alpha)
+    if u_scale is not None:
+        texture["u_scale"] = _normalize_scalar(u_scale, name="u_scale")
+    if v_scale is not None:
+        texture["v_scale"] = _normalize_scalar(v_scale, name="v_scale")
+    if u_offset is not None:
+        texture["u_offset"] = _normalize_scalar(u_offset, name="u_offset")
+    if v_offset is not None:
+        texture["v_offset"] = _normalize_scalar(v_offset, name="v_offset")
+    return texture
 
 
 def lighting_preset3d(
@@ -1798,6 +2342,312 @@ def lighting_preset3d(
         light3d_point(name="three_point_fill", position=fill, intensity=0.45, diffuse="#DCEBFF", specular="#FFFFFF"),
         light3d_point(name="three_point_rim", position=rim, intensity=0.65, diffuse="#FFFFFF", specular="#FFFFFF"),
     ]
+
+
+def extract_geometry3d(x: Any, *, target: Any = None) -> dict[str, Any]:
+    mesh, _, _ = _coerce_geometry_target(x, target=target)
+    return {
+        "name": mesh.get("name", "geometry"),
+        "vertices": _mesh_vertex_rows(mesh),
+        "indices": _mesh_index_rows(mesh),
+    }
+
+
+def replace_geometry3d(x: Any, geometry: dict[str, Any], *, target: Any = None) -> Any:
+    if not isinstance(geometry, dict):
+        raise TypeError("`geometry` must be a dict.")
+    vertices = _normalize_xyz_points(geometry.get("vertices"), name="vertices")
+    indices = _normalize_indices(geometry.get("indices"), name="indices")
+
+    mesh, mesh_index, scene = _coerce_geometry_target(x, target=target)
+    mesh["vertices"] = _flatten_vertex_rows(vertices)
+    mesh["indices"] = indices
+
+    if scene is not None and mesh_index is not None:
+        scene.objects[mesh_index] = mesh
+        return scene
+    return mesh
+
+
+def scene_bounds3d(x: Any, *, target: Any = None) -> dict[str, Any]:
+    if isinstance(x, Scene):
+        mesh_indices = _scene_mesh_indices(x, target=target)
+        if not mesh_indices:
+            raise ValueError("Scene does not contain any `mesh3d` objects.")
+
+        vertices: list[list[float]] = []
+        for mesh_index in mesh_indices:
+            mesh = x.objects[mesh_index]
+            vertices.extend(_mesh_vertex_rows(mesh))
+        if not vertices:
+            raise ValueError("Resolved scene meshes do not contain any vertices.")
+        return _geometry_bounds({"vertices": vertices})
+
+    if isinstance(x, dict):
+        if x.get("type") == "mesh3d":
+            return _geometry_bounds(extract_geometry3d(x))
+        if "vertices" in x:
+            return _geometry_bounds(x)
+
+    raise TypeError(
+        "`scene_bounds3d()` supports Babylonian `mesh3d` payloads, geometry dicts, or `Scene` objects."
+    )
+
+
+def _coerce_asset_target(x: Any, *, asset: Any = None) -> tuple[dict[str, Any], int | None, Scene | None]:
+    if isinstance(x, Scene):
+        scene = x.clone()
+        indices = _scene_asset_indices(scene, asset=asset)
+        asset_index = indices[0]
+        obj = scene.objects[asset_index]
+        return deepcopy(obj), asset_index, scene
+
+    if isinstance(x, dict) and x.get("type") == "asset3d":
+        return deepcopy(x), None, None
+
+    raise TypeError("Imported-asset helpers currently support Babylonian `asset3d` payloads or `Scene` objects.")
+
+
+def _asset_override_target_matches(existing: Any, target: Any) -> bool:
+    return existing == target
+
+
+def _normalize_geometry_override(geometry: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(geometry, dict):
+        raise TypeError("`geometry` must be a dict.")
+    normalized: dict[str, Any] = {}
+    if geometry.get("vertices") is not None:
+        vertices_value = geometry.get("vertices")
+        vertex_items = _as_list(vertices_value)
+        if vertex_items and isinstance(vertex_items[0], (list, tuple)):
+            normalized["vertices"] = _flatten_vertex_rows(
+                _normalize_xyz_points(vertices_value, name="vertices")
+            )
+        else:
+            normalized["vertices"] = [float(value) for value in vertex_items]
+            if len(normalized["vertices"]) % 3 != 0:
+                raise ValueError("`vertices` must contain a multiple of 3 entries.")
+    if geometry.get("indices") is not None:
+        normalized["indices"] = _normalize_indices(geometry.get("indices"), name="indices")
+    if geometry.get("normals") is not None:
+        normals_value = geometry.get("normals")
+        normal_items = _as_list(normals_value)
+        if normal_items and isinstance(normal_items[0], (list, tuple)):
+            normalized["normals"] = _flatten_vertex_rows(
+                _normalize_xyz_points(normals_value, name="normals")
+            )
+        else:
+            normalized["normals"] = [float(value) for value in normal_items]
+            if len(normalized["normals"]) % 3 != 0:
+                raise ValueError("`normals` must contain a multiple of 3 entries.")
+    if geometry.get("uvs") is not None:
+        uvs = [float(value) for value in _as_list(geometry.get("uvs"))]
+        if len(uvs) % 2 != 0:
+            raise ValueError("`uvs` must contain a multiple of 2 entries.")
+        normalized["uvs"] = uvs
+    if not normalized:
+        raise ValueError("Geometry override must include at least one of `vertices`, `indices`, `normals`, or `uvs`.")
+    return normalized
+
+
+def model_info3d(x: Any, *, asset: Any = None) -> dict[str, Any]:
+    asset_obj, asset_index, scene = _coerce_asset_target(x, asset=asset)
+    material_overrides = asset_obj.get("material_overrides") or []
+    geometry_overrides = asset_obj.get("geometry_overrides") or []
+    info = {
+        "name": asset_obj.get("name"),
+        "file": asset_obj.get("file"),
+        "format": asset_obj.get("format"),
+        "preserve_materials": bool(asset_obj.get("preserve_materials", True)),
+        "has_companion_files": bool(asset_obj.get("companion_files")),
+        "companion_files": sorted((asset_obj.get("companion_files") or {}).keys()),
+        "scene_index": asset_index,
+        "material_override_targets": [
+            deepcopy(override.get("target"))
+            for override in material_overrides
+            if isinstance(override, dict) and override.get("target") is not None
+        ],
+        "geometry_override_targets": [
+            deepcopy(override.get("target"))
+            for override in geometry_overrides
+            if isinstance(override, dict) and override.get("target") is not None
+        ],
+        "has_global_material_override": asset_obj.get("material") is not None,
+        "show_bounding_box": bool(asset_obj.get("show_bounding_box")),
+    }
+    if scene is not None:
+        info["object_count"] = len(scene.objects)
+    return info
+
+
+def extract_model_geometry3d(x: Any, *, asset: Any = None, target: Any = None) -> dict[str, Any]:
+    asset_obj, _, _ = _coerce_asset_target(x, asset=asset)
+    normalized_target = _normalize_imported_mesh_target(target)
+    overrides = asset_obj.get("geometry_overrides") or []
+    for override in overrides:
+        if not isinstance(override, dict):
+            continue
+        if _asset_override_target_matches(override.get("target"), normalized_target):
+            geometry = deepcopy(override.get("geometry") or {})
+            if geometry.get("vertices") is not None:
+                geometry["vertices"] = _mesh_vertex_rows({"vertices": geometry["vertices"]})
+            if geometry.get("indices") is not None:
+                geometry["indices"] = _mesh_index_rows({"indices": geometry["indices"]})
+            if geometry.get("normals") is not None:
+                geometry["normals"] = _mesh_vertex_rows({"vertices": geometry["normals"]})
+            return geometry
+    raise ValueError(
+        "No geometry override found for the requested imported mesh target. "
+        "Use `replace_model_geometry()` first to seed an override."
+    )
+
+
+def replace_model_geometry3d(x: Any, geometry: dict[str, Any], *, asset: Any = None, target: Any = None) -> Any:
+    normalized_target = _normalize_imported_mesh_target(target)
+    normalized_geometry = _normalize_geometry_override(geometry)
+    asset_obj, asset_index, scene = _coerce_asset_target(x, asset=asset)
+
+    overrides = deepcopy(asset_obj.get("geometry_overrides") or [])
+    replaced = False
+    for idx, override in enumerate(overrides):
+        if isinstance(override, dict) and _asset_override_target_matches(override.get("target"), normalized_target):
+            overrides[idx] = {"target": normalized_target, "geometry": normalized_geometry}
+            replaced = True
+            break
+    if not replaced:
+        overrides.append({"target": normalized_target, "geometry": normalized_geometry})
+    asset_obj["geometry_overrides"] = overrides
+
+    if scene is not None and asset_index is not None:
+        scene.objects[asset_index] = asset_obj
+        return scene
+    return asset_obj
+
+
+def set_model_material3d(x: Any, material: Any, *, asset: Any = None, target: Any = None) -> Any:
+    normalized_material = _normalize_material(material)
+    normalized_target = _normalize_imported_mesh_target(target)
+    asset_obj, asset_index, scene = _coerce_asset_target(x, asset=asset)
+
+    if normalized_target is None:
+        asset_obj["material"] = deepcopy(normalized_material)
+    else:
+        overrides = deepcopy(asset_obj.get("material_overrides") or [])
+        replaced = False
+        for idx, override in enumerate(overrides):
+            if isinstance(override, dict) and _asset_override_target_matches(override.get("target"), normalized_target):
+                overrides[idx] = {"target": normalized_target, "material": normalized_material}
+                replaced = True
+                break
+        if not replaced:
+            overrides.append({"target": normalized_target, "material": normalized_material})
+        asset_obj["material_overrides"] = overrides
+
+    if scene is not None and asset_index is not None:
+        scene.objects[asset_index] = asset_obj
+        return scene
+    return asset_obj
+
+
+def translate_geometry3d(geometry: dict[str, Any], by: Sequence[float]) -> dict[str, Any]:
+    if not isinstance(geometry, dict):
+        raise TypeError("`geometry` must be a dict.")
+    delta = _normalize_vector3(by, name="by")
+    vertices = _normalize_xyz_points(geometry.get("vertices"), name="vertices")
+    return {
+        **deepcopy(geometry),
+        "vertices": [
+            [row[0] + delta[0], row[1] + delta[1], row[2] + delta[2]]
+            for row in vertices
+        ],
+    }
+
+
+def scale_geometry3d(geometry: dict[str, Any], by: float | Sequence[float]) -> dict[str, Any]:
+    if not isinstance(geometry, dict):
+        raise TypeError("`geometry` must be a dict.")
+    if isinstance(by, (list, tuple)):
+        scale = _normalize_vector3(by, name="by")
+    else:
+        factor = _normalize_scalar(by, name="by")
+        scale = [factor, factor, factor]
+    vertices = _normalize_xyz_points(geometry.get("vertices"), name="vertices")
+    return {
+        **deepcopy(geometry),
+        "vertices": [
+            [row[0] * scale[0], row[1] * scale[1], row[2] * scale[2]]
+            for row in vertices
+        ],
+    }
+
+
+def set_vertices3d(x: Any, vertices: Any, *, target: Any = None) -> Any:
+    geometry = extract_geometry3d(x, target=target)
+    geometry["vertices"] = _normalize_xyz_points(vertices, name="vertices")
+    return replace_geometry3d(x, geometry, target=target)
+
+
+def set_material3d(x: Any, material: Any, *, target: Any = None) -> Any:
+    normalized_material = _normalize_material(material)
+
+    if isinstance(x, Scene):
+        scene = x.clone()
+        mesh_indices = _scene_mesh_indices(scene, target=target)
+        if not mesh_indices:
+            raise ValueError("Scene does not contain any `mesh3d` objects.")
+        for mesh_index in mesh_indices:
+            mesh = deepcopy(scene.objects[mesh_index])
+            mesh["material"] = deepcopy(normalized_material)
+            scene.objects[mesh_index] = mesh
+        return scene
+
+    if isinstance(x, dict) and x.get("type") == "mesh3d":
+        mesh = deepcopy(x)
+        mesh["material"] = normalized_material
+        return mesh
+
+    raise TypeError("`set_material3d()` supports Babylonian `mesh3d` payloads or `Scene` objects.")
+
+
+def morph_target3d(
+    x: Any,
+    target: Any,
+    *,
+    influence: float = 0,
+    name: str | None = None,
+    **mesh_kwargs: Any,
+) -> dict[str, Any]:
+    if isinstance(x, dict) and x.get("type") == "mesh3d":
+        mesh = deepcopy(x)
+        if mesh_kwargs:
+            if "color" in mesh_kwargs and mesh_kwargs["color"] is not None:
+                mesh["color"] = _normalize_color(mesh_kwargs["color"])
+            if "alpha" in mesh_kwargs and mesh_kwargs["alpha"] is not None:
+                mesh["alpha"] = float(mesh_kwargs["alpha"])
+            if "specularity" in mesh_kwargs and mesh_kwargs["specularity"] is not None:
+                mesh["specularity"] = _normalize_color(mesh_kwargs["specularity"])
+            if "material" in mesh_kwargs and mesh_kwargs["material"] is not None:
+                mesh["material"] = _normalize_material(mesh_kwargs["material"])
+    else:
+        mesh = as_babylon_mesh(x, **mesh_kwargs)
+
+    target_mesh = target if (isinstance(target, dict) and target.get("type") == "mesh3d") else as_babylon_mesh(target)
+    if mesh.get("indices") != target_mesh.get("indices"):
+        raise ValueError("`x` and `target` must use identical triangle topology.")
+    if len(mesh.get("vertices", [])) != len(target_mesh.get("vertices", [])):
+        raise ValueError("`x` and `target` must contain the same number of vertices.")
+
+    spec = {
+        "name": name or f"{mesh.get('name', 'mesh')}-morph",
+        "vertices": [float(value) for value in target_mesh["vertices"]],
+        "influence": _normalize_scalar(influence, name="influence"),
+    }
+    existing = deepcopy(mesh.get("morph_target") or [])
+    if isinstance(existing, dict):
+        existing = [existing]
+    existing.append(spec)
+    mesh["morph_target"] = existing
+    return mesh
 
 
 def points3d(
@@ -1976,6 +2826,15 @@ def render_scene3d(
         w = BabylonWidget(scene=scene, width=width, height=height)
         _LAST_ANYWIDGET = w
         return w
+    limitations = _scene_iframe_limitations(scene)
+    if limitations:
+        warnings.warn(
+            "The `iframe` renderer is a portable viewer/export surface and does not fully support "
+            + ", ".join(limitations)
+            + ". Use `renderer=\"anywidget\"` for the first-class interactive Python experience.",
+            UserWarning,
+            stacklevel=2,
+        )
     return BabylonHTMLWidget(scene=scene, width=width, height=height)
 
 

@@ -1040,6 +1040,71 @@ HTMLWidgets.widget({
       return importedMeshMatchesTarget(mesh, override.target, meshIndex);
     }
 
+    function localImportedMeshTransformMatrix(mesh) {
+      if (!mesh || !mesh.computeWorldMatrix || !mesh.getWorldMatrix) {
+        return BABYLON.Matrix.Identity();
+      }
+      mesh.computeWorldMatrix(true);
+      var localMatrix = mesh.getWorldMatrix().clone();
+      if (mesh.parent && mesh.parent.computeWorldMatrix && mesh.parent.getWorldMatrix) {
+        mesh.parent.computeWorldMatrix(true);
+        var parentInverse = mesh.parent.getWorldMatrix().clone();
+        parentInverse.invert();
+        localMatrix = localMatrix.multiply(parentInverse);
+      }
+      return localMatrix;
+    }
+
+    function exportImportedMeshGeometry(mesh) {
+      if (!mesh || !mesh.getVerticesData || !mesh.getIndices) {
+        return null;
+      }
+
+      var positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+      var indices = mesh.getIndices();
+      if (!positions || !indices) {
+        return null;
+      }
+
+      var localMatrix = localImportedMeshTransformMatrix(mesh);
+      var normalMatrix = localMatrix.clone();
+      normalMatrix.setTranslationFromFloats(0, 0, 0);
+
+      var bakedPositions = [];
+      for (var i = 0; i < positions.length; i += 3) {
+        var point = BABYLON.Vector3.TransformCoordinates(
+          new BABYLON.Vector3(positions[i], positions[i + 1], positions[i + 2]),
+          localMatrix
+        );
+        bakedPositions.push(point.x, point.y, point.z);
+      }
+
+      var baked = {
+        vertices: bakedPositions,
+        indices: Array.from(indices)
+      };
+
+      var normals = mesh.getVerticesData(BABYLON.VertexBuffer.NormalKind);
+      if (normals && normals.length) {
+        var bakedNormals = [];
+        for (var j = 0; j < normals.length; j += 3) {
+          var normal = BABYLON.Vector3.TransformNormal(
+            new BABYLON.Vector3(normals[j], normals[j + 1], normals[j + 2]),
+            normalMatrix
+          ).normalize();
+          bakedNormals.push(normal.x, normal.y, normal.z);
+        }
+        baked.normals = bakedNormals;
+      }
+
+      var uvs = mesh.getVerticesData(BABYLON.VertexBuffer.UVKind);
+      if (uvs && uvs.length) {
+        baked.uvs = Array.from(uvs);
+      }
+
+      return baked;
+    }
+
     function applyImportedGeometryOverride(mesh, geometry) {
       if (!mesh || !geometry) {
         return;
@@ -1129,7 +1194,11 @@ HTMLWidgets.widget({
         rootNode,
         "mesh",
         null,
-        {importedMeshes: importedMeshes || []}
+        {
+          importedMeshes: importedMeshes || [],
+          importedAsset: true,
+          assetName: primitive.name || null
+        }
       );
 
       if (!importedMeshes || !importedMeshes.length) {
@@ -1137,9 +1206,24 @@ HTMLWidgets.widget({
       }
 
       importedMeshes.forEach(function(mesh, meshIndex) {
-        registerEditableTarget(editableTargets, {
-          name: mesh.name || (primitive.name || "asset") + "-mesh-" + meshIndex
-        }, meshIndex, mesh, "mesh");
+        registerEditableTarget(
+          editableTargets,
+          {
+            type: primitive.type,
+            name: mesh.name || (primitive.name || "asset") + "-mesh-" + meshIndex
+          },
+          meshIndex,
+          mesh,
+          "mesh",
+          null,
+          {
+            importedMeshes: [mesh],
+            importedAsset: true,
+            assetName: primitive.name || null,
+            importedMeshTarget: mesh.name || (meshIndex + 1),
+            importedMeshIndex: meshIndex
+          }
+        );
       });
     }
 
@@ -3052,6 +3136,13 @@ HTMLWidgets.widget({
             name: target.name || null
           };
 
+          if (target.importedAsset) {
+            entry.asset_name = target.assetName || null;
+            if (target.importedMeshTarget !== undefined) {
+              entry.imported_mesh_target = target.importedMeshTarget;
+            }
+          }
+
         if (target.kind === "light") {
           entry.light_type = target.primitive.light_type || "hemispheric";
             if (target.node.position) {
@@ -3101,6 +3192,12 @@ HTMLWidgets.widget({
           entry.scaling = vectorToArray(target.node.scaling || new BABYLON.Vector3(1, 1, 1));
           if (target.primitive && target.primitive.material) {
             entry.material = cloneMaterialSpec(target.primitive.material);
+          }
+          if (target.importedMeshTarget !== undefined) {
+            var transformSignature = editorTargetTransformSignature(target);
+            if (transformSignature !== target.originalTransformSignature) {
+              entry.geometry_override = exportImportedMeshGeometry(target.node);
+            }
           }
           if (target.primitive && target.primitive.show_bounding_box !== undefined) {
             entry.show_bounding_box = target.primitive.show_bounding_box === true;
@@ -4994,6 +5091,7 @@ HTMLWidgets.widget({
 
       targets.push(target);
       applyBoundingBoxToEditorTarget(target);
+      target.originalTransformSignature = editorTargetTransformSignature(target);
     }
 
     function editorTargetTransformSignature(target) {
@@ -5918,7 +6016,8 @@ HTMLWidgets.widget({
             }
             BABYLON.VertexData.ComputeNormals(vertexData.positions, vertexData.indices, normals);
             vertexData.normals = normals;
-            vertexData.applyToMesh(babylonMesh);
+            // Morph targets require an updatable geometry buffer on Babylon meshes.
+            vertexData.applyToMesh(babylonMesh, true);
 
             applyCustomVertexAttributes(babylonMesh, primitive);
             applyMorphTarget(babylonMesh, primitive);

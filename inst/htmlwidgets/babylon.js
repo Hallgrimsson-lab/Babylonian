@@ -23,13 +23,25 @@ HTMLWidgets.widget({
 
     // Create a scene
     var scene = new BABYLON.Scene(engine);
+    // Match rgl/OpenGL conventions: right-handed coordinates and CCW front-face
+    // winding so meshes generated with rgl/OpenGL conventions render the
+    // outside surface (not the interior) when backface culling is on.
+    scene.useRightHandedSystem = true;
     scene.clearColor = defaultSceneBackground.clone();
+
+    // Canonical default framing angles. Used both at construction time and
+    // re-asserted in frameScene() so baseCameraState.offset has a scene-
+    // independent direction (otherwise ArcRotateCamera.setTarget rebuilds
+    // alpha/beta from the pre-setTarget world position, yielding a different
+    // base direction for each scene's bounding-box center).
+    var DEFAULT_CAMERA_ALPHA = -Math.PI / 2;
+    var DEFAULT_CAMERA_BETA = Math.PI / 2.2;
 
     // Create a camera
     var camera = new BABYLON.ArcRotateCamera(
       "camera",
-      -Math.PI / 2,
-      Math.PI / 2.2,
+      DEFAULT_CAMERA_ALPHA,
+      DEFAULT_CAMERA_BETA,
       10,
       new BABYLON.Vector3(0, 0, 0),
       scene
@@ -644,8 +656,10 @@ HTMLWidgets.widget({
       if (spec.alpha !== undefined) {
         material.alpha = spec.alpha;
         if (spec.alpha < 1) {
-          material.needDepthPrePass = false;
-          material.separateCullingPass = false;
+          // A depth pre-pass writes depth-only first, so subsequent alpha-blended
+          // fragments from the same mesh don't z-fight against each other.
+          material.needDepthPrePass = true;
+          material.separateCullingPass = true;
           if (material.forceDepthWrite !== undefined) {
             material.forceDepthWrite = false;
           }
@@ -1040,6 +1054,71 @@ HTMLWidgets.widget({
       return importedMeshMatchesTarget(mesh, override.target, meshIndex);
     }
 
+    function localImportedMeshTransformMatrix(mesh) {
+      if (!mesh || !mesh.computeWorldMatrix || !mesh.getWorldMatrix) {
+        return BABYLON.Matrix.Identity();
+      }
+      mesh.computeWorldMatrix(true);
+      var localMatrix = mesh.getWorldMatrix().clone();
+      if (mesh.parent && mesh.parent.computeWorldMatrix && mesh.parent.getWorldMatrix) {
+        mesh.parent.computeWorldMatrix(true);
+        var parentInverse = mesh.parent.getWorldMatrix().clone();
+        parentInverse.invert();
+        localMatrix = localMatrix.multiply(parentInverse);
+      }
+      return localMatrix;
+    }
+
+    function exportImportedMeshGeometry(mesh) {
+      if (!mesh || !mesh.getVerticesData || !mesh.getIndices) {
+        return null;
+      }
+
+      var positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+      var indices = mesh.getIndices();
+      if (!positions || !indices) {
+        return null;
+      }
+
+      var localMatrix = localImportedMeshTransformMatrix(mesh);
+      var normalMatrix = localMatrix.clone();
+      normalMatrix.setTranslationFromFloats(0, 0, 0);
+
+      var bakedPositions = [];
+      for (var i = 0; i < positions.length; i += 3) {
+        var point = BABYLON.Vector3.TransformCoordinates(
+          new BABYLON.Vector3(positions[i], positions[i + 1], positions[i + 2]),
+          localMatrix
+        );
+        bakedPositions.push(point.x, point.y, point.z);
+      }
+
+      var baked = {
+        vertices: bakedPositions,
+        indices: Array.from(indices)
+      };
+
+      var normals = mesh.getVerticesData(BABYLON.VertexBuffer.NormalKind);
+      if (normals && normals.length) {
+        var bakedNormals = [];
+        for (var j = 0; j < normals.length; j += 3) {
+          var normal = BABYLON.Vector3.TransformNormal(
+            new BABYLON.Vector3(normals[j], normals[j + 1], normals[j + 2]),
+            normalMatrix
+          ).normalize();
+          bakedNormals.push(normal.x, normal.y, normal.z);
+        }
+        baked.normals = bakedNormals;
+      }
+
+      var uvs = mesh.getVerticesData(BABYLON.VertexBuffer.UVKind);
+      if (uvs && uvs.length) {
+        baked.uvs = Array.from(uvs);
+      }
+
+      return baked;
+    }
+
     function applyImportedGeometryOverride(mesh, geometry) {
       if (!mesh || !geometry) {
         return;
@@ -1129,7 +1208,11 @@ HTMLWidgets.widget({
         rootNode,
         "mesh",
         null,
-        {importedMeshes: importedMeshes || []}
+        {
+          importedMeshes: importedMeshes || [],
+          importedAsset: true,
+          assetName: primitive.name || null
+        }
       );
 
       if (!importedMeshes || !importedMeshes.length) {
@@ -1137,9 +1220,24 @@ HTMLWidgets.widget({
       }
 
       importedMeshes.forEach(function(mesh, meshIndex) {
-        registerEditableTarget(editableTargets, {
-          name: mesh.name || (primitive.name || "asset") + "-mesh-" + meshIndex
-        }, meshIndex, mesh, "mesh");
+        registerEditableTarget(
+          editableTargets,
+          {
+            type: primitive.type,
+            name: mesh.name || (primitive.name || "asset") + "-mesh-" + meshIndex
+          },
+          meshIndex,
+          mesh,
+          "mesh",
+          null,
+          {
+            importedMeshes: [mesh],
+            importedAsset: true,
+            assetName: primitive.name || null,
+            importedMeshTarget: mesh.name || (meshIndex + 1),
+            importedMeshIndex: meshIndex
+          }
+        );
       });
     }
 
@@ -2091,28 +2189,36 @@ HTMLWidgets.widget({
       }
 
       var view = sceneOptions.view;
-      if (view.camera) {
-        var normalizedCamera = normalizeCameraSyncState(view.camera);
-        if (normalizedCamera) {
-          camera.setTarget(new BABYLON.Vector3(
-            normalizedCamera.target[0],
-            normalizedCamera.target[1],
-            normalizedCamera.target[2]
-          ));
-          camera.alpha = normalizedCamera.alpha;
-          camera.beta = normalizedCamera.beta;
-          camera.radius = normalizedCamera.radius;
-          return;
-        }
-      }
 
       var zoom = Number(view.zoom);
       if (!isFinite(zoom) || zoom <= 0) {
         zoom = 1;
       }
 
+      // Prefer the relative userMatrix path: it rotates around the *new*
+      // scene's bounds.center and uses a zoom-scaled radius. The absolute
+      // view.camera block is captured in scene-original coordinates, so when
+      // the saved state is reapplied to a scene whose center/scale differs
+      // (e.g. a subset of the original meshes) using it directly would point
+      // the camera at the wrong target.
       var userMatrix = view.userMatrix;
-      if (!Array.isArray(userMatrix) || userMatrix.length < 3) {
+      var hasUserMatrix = Array.isArray(userMatrix) && userMatrix.length >= 3;
+
+      if (!hasUserMatrix) {
+        if (view.camera) {
+          var normalizedCamera = normalizeCameraSyncState(view.camera);
+          if (normalizedCamera) {
+            camera.setTarget(new BABYLON.Vector3(
+              normalizedCamera.target[0],
+              normalizedCamera.target[1],
+              normalizedCamera.target[2]
+            ));
+            camera.alpha = normalizedCamera.alpha;
+            camera.beta = normalizedCamera.beta;
+            camera.radius = normalizedCamera.radius;
+            return;
+          }
+        }
         camera.radius = baseCameraState.radius / zoom;
         return;
       }
@@ -3052,6 +3158,13 @@ HTMLWidgets.widget({
             name: target.name || null
           };
 
+          if (target.importedAsset) {
+            entry.asset_name = target.assetName || null;
+            if (target.importedMeshTarget !== undefined) {
+              entry.imported_mesh_target = target.importedMeshTarget;
+            }
+          }
+
         if (target.kind === "light") {
           entry.light_type = target.primitive.light_type || "hemispheric";
             if (target.node.position) {
@@ -3101,6 +3214,12 @@ HTMLWidgets.widget({
           entry.scaling = vectorToArray(target.node.scaling || new BABYLON.Vector3(1, 1, 1));
           if (target.primitive && target.primitive.material) {
             entry.material = cloneMaterialSpec(target.primitive.material);
+          }
+          if (target.importedMeshTarget !== undefined) {
+            var transformSignature = editorTargetTransformSignature(target);
+            if (transformSignature !== target.originalTransformSignature) {
+              entry.geometry_override = exportImportedMeshGeometry(target.node);
+            }
           }
           if (target.primitive && target.primitive.show_bounding_box !== undefined) {
             entry.show_bounding_box = target.primitive.show_bounding_box === true;
@@ -4850,16 +4969,35 @@ HTMLWidgets.widget({
       }
 
       camera.setTarget(center);
+      // ArcRotateCamera.setTarget calls rebuildAnglesAndRadius(), which
+      // recomputes alpha/beta to preserve the pre-setTarget world position
+      // relative to the new target. That makes baseCameraState.offset's
+      // direction depend on where `center` is in world space, so the same
+      // captured userMatrix would rotate two scenes by different amounts.
+      // Pin alpha/beta to the canonical defaults so the base direction is
+      // scene-independent.
+      camera.alpha = DEFAULT_CAMERA_ALPHA;
+      camera.beta = DEFAULT_CAMERA_BETA;
       camera.radius = radius * 2.5;
       camera.lowerRadiusLimit = radius * 0.2;
       camera.upperRadiusLimit = radius * 20;
       camera.minZ = Math.max(radius / 1000, 0.01);
       camera.maxZ = Math.max(radius * 100, 1000);
       currentSceneBounds = {min: min.clone(), max: max.clone(), center: center.clone(), radius: radius};
+      // camera.position is computed lazily by Babylon and may still hold the
+      // value left by setTarget/rebuildAnglesAndRadius at this point. Compute
+      // the canonical offset directly from the pinned alpha/beta/radius so
+      // baseCameraState.offset's direction is identical across every scene,
+      // regardless of where center sits in world space.
+      var canonicalOffset = new BABYLON.Vector3(
+        Math.cos(DEFAULT_CAMERA_ALPHA) * Math.sin(DEFAULT_CAMERA_BETA),
+        Math.cos(DEFAULT_CAMERA_BETA),
+        Math.sin(DEFAULT_CAMERA_ALPHA) * Math.sin(DEFAULT_CAMERA_BETA)
+      ).scale(camera.radius);
       baseCameraState = {
         target: center.clone(),
         radius: camera.radius,
-        offset: camera.position.subtract(center),
+        offset: canonicalOffset,
         up: camera.upVector.clone()
       };
 
@@ -4923,6 +5061,8 @@ HTMLWidgets.widget({
       var lines = [];
       var colors = [];
       var fallback = BABYLON.Color4.FromColor3(BABYLON.Color3.FromHexString("#111111"), primitive.alpha === undefined ? 1 : primitive.alpha);
+      var alpha = primitive.alpha === undefined ? 1 : Number(primitive.alpha);
+      var width = primitive.width === undefined ? 1 : Number(primitive.width);
 
       for (var i = 0; i < primitive.points.length; i += 2) {
         var segmentColor = coerceColor4(
@@ -4936,6 +5076,65 @@ HTMLWidgets.widget({
           new BABYLON.Vector3(primitive.points[i + 1][0], primitive.points[i + 1][1], primitive.points[i + 1][2])
         ]);
         colors.push([segmentColor, segmentColor]);
+      }
+
+      if (isFinite(width) && width > 1) {
+        // Render each segment as a small tube so width is honoured. We merge
+        // the per-segment tubes into one mesh so the editor still sees a
+        // single primitive node.
+        var allPoints = [];
+        for (var p = 0; p < lines.length; p++) {
+          allPoints.push(lines[p][0]);
+          allPoints.push(lines[p][1]);
+        }
+        var radius = polylineTubeRadius(allPoints, width);
+        var tubeMeshes = [];
+        for (var s = 0; s < lines.length; s++) {
+          var segMesh = BABYLON.MeshBuilder.CreateTube(
+            name + "-seg-" + s,
+            {
+              path: lines[s],
+              radius: radius,
+              tessellation: 8,
+              cap: BABYLON.Mesh.CAP_ALL,
+              updatable: false
+            },
+            scene
+          );
+          var segMat = new BABYLON.StandardMaterial(name + "-seg-mat-" + s, scene);
+          var segCol = colors[s][0];
+          segMat.diffuseColor = new BABYLON.Color3(segCol.r, segCol.g, segCol.b);
+          segMat.emissiveColor = segMat.diffuseColor;
+          segMat.specularColor = new BABYLON.Color3(0, 0, 0);
+          segMat.disableLighting = true;
+          if (alpha < 1) {
+            segMat.alpha = alpha;
+            segMat.needDepthPrePass = true;
+          }
+          segMesh.material = segMat;
+          managedMaterials.push(segMat);
+          tubeMeshes.push(segMesh);
+        }
+
+        if (tubeMeshes.length === 1) {
+          var single = registerNode(tubeMeshes[0]);
+          single.isPickable = false;
+          return single;
+        }
+
+        var merged = registerNode(BABYLON.Mesh.MergeMeshes(
+          tubeMeshes,
+          true,    // disposeSource
+          true,    // allow32BitIndices
+          undefined,
+          false,
+          true     // multiMultiMaterials: keep per-segment materials
+        ));
+        if (merged) {
+          merged.isPickable = false;
+          merged.name = name;
+          return merged;
+        }
       }
 
       var lineSystem = registerNode(BABYLON.MeshBuilder.CreateLineSystem(
@@ -4955,15 +5154,74 @@ HTMLWidgets.widget({
       var points = primitive.points.map(function(coords) {
         return new BABYLON.Vector3(coords[0], coords[1], coords[2]);
       });
+      var width = primitive.width === undefined ? 1 : Number(primitive.width);
+      var color3 = coerceColor3(primitive.color, BABYLON.Color3.FromHexString("#111111"));
+      var alpha = primitive.alpha === undefined ? 1 : Number(primitive.alpha);
+
+      if (isFinite(width) && width > 1) {
+        var radius = polylineTubeRadius(points, width);
+        var tube = registerNode(BABYLON.MeshBuilder.CreateTube(
+          name,
+          {
+            path: points,
+            radius: radius,
+            tessellation: 12,
+            cap: BABYLON.Mesh.CAP_ALL,
+            updatable: false
+          },
+          scene
+        ));
+        var tubeMaterial = new BABYLON.StandardMaterial(name + "-mat", scene);
+        tubeMaterial.diffuseColor = color3;
+        tubeMaterial.emissiveColor = color3;
+        tubeMaterial.specularColor = new BABYLON.Color3(0, 0, 0);
+        tubeMaterial.disableLighting = true;
+        if (alpha < 1) {
+          tubeMaterial.alpha = alpha;
+          tubeMaterial.needDepthPrePass = true;
+        }
+        tube.material = tubeMaterial;
+        tube.isPickable = false;
+        managedMaterials.push(tubeMaterial);
+        return tube;
+      }
+
       var line = registerNode(BABYLON.MeshBuilder.CreateLines(
         name,
         {points: points, updatable: false},
         scene
       ));
-      line.color = coerceColor3(primitive.color, BABYLON.Color3.FromHexString("#111111"));
-      line.alpha = primitive.alpha === undefined ? 1 : Number(primitive.alpha);
+      line.color = color3;
+      line.alpha = alpha;
       line.isPickable = false;
       return line;
+    }
+
+    function polylineTubeRadius(points, width) {
+      // Width = 1 keeps the thin CreateLines path. For width > 1 we render a
+      // tube whose radius scales with width and the visible scene scale so
+      // lines remain visible across very small or very large meshes.
+      var sceneRadius = currentSceneBounds && currentSceneBounds.radius
+        ? currentSceneBounds.radius
+        : null;
+
+      if (!sceneRadius && points && points.length >= 2) {
+        var minV = points[0].clone();
+        var maxV = points[0].clone();
+        for (var i = 1; i < points.length; i++) {
+          minV = BABYLON.Vector3.Minimize(minV, points[i]);
+          maxV = BABYLON.Vector3.Maximize(maxV, points[i]);
+        }
+        sceneRadius = BABYLON.Vector3.Distance(minV, maxV) * 0.5;
+      }
+
+      if (!isFinite(sceneRadius) || sceneRadius <= 0) {
+        sceneRadius = 1;
+      }
+
+      // Roughly mimic rgl::lineWidth pixel-style scaling: width 1 ≈ 0.0015 of
+      // the scene radius, scaling linearly from there.
+      return Math.max(1e-5, width * 0.0015 * sceneRadius);
     }
 
     function registerEditableTarget(targets, primitive, index, node, kind, label, extras) {
@@ -4994,6 +5252,7 @@ HTMLWidgets.widget({
 
       targets.push(target);
       applyBoundingBoxToEditorTarget(target);
+      target.originalTransformSignature = editorTargetTransformSignature(target);
     }
 
     function editorTargetTransformSignature(target) {
@@ -5918,7 +6177,8 @@ HTMLWidgets.widget({
             }
             BABYLON.VertexData.ComputeNormals(vertexData.positions, vertexData.indices, normals);
             vertexData.normals = normals;
-            vertexData.applyToMesh(babylonMesh);
+            // Morph targets require an updatable geometry buffer on Babylon meshes.
+            vertexData.applyToMesh(babylonMesh, true);
 
             applyCustomVertexAttributes(babylonMesh, primitive);
             applyMorphTarget(babylonMesh, primitive);
